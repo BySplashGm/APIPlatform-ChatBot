@@ -87,7 +87,7 @@ reaction_on_message_received = false
     # Please don't comment this line for now, we need it to parse the executable name.
     allowed_executables = [ "npx", "uvx" ]
 
-[ui]
+[UI]
 name = "Assistant API Platform"
 default_theme = "dark"
 
