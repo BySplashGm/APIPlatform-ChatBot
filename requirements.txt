@@ -1,0 +1,5 @@
+chainlit
+google-generativeai>=0.5.0
+vectorcode
+python-socketio>=5.11
+python-engineio>=4.9

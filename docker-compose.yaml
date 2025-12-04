@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api-platform-chatbot
+    
+    ports:
+      - "2424:2424"
+      
+    volumes:
+      - docs_data:/app/api-platform-docs
+      
+    env_file:
+      - .env
+      
+    restart: unless-stopped
+
+volumes:
+  docs_data:
+    driver: local
