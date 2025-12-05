@@ -1,69 +1,51 @@
-# Prototype ChatBot APIPlatform
-Réalisation d'un prototype de ChatBot pour la documentation d'Api Platform.
+# Intégrer le ChatBot directement sur la doc
 
-## Sommaire
-- [Transcrire la documentation en vecteurs](#transcrire-la-documentation-en-vecteurs)
-- [RAG](#rag)
-- [Récupérer la documentation](#récupérer-la-documentation)
-- [Interface Utilisateur](#interface-utilisateur)
-- [Procédure du prototype](#procédure-du-prototype)
-- [Utiliser le prototype](#utiliser-le-prototype)
-- [Sources et références](#sources-et-références)
+## Conserver VectorCode en moteur RAG
 
-## Transcrire la documentation en vecteurs
+VectorCode est spécialisé dans l'indexaction de code ce qui le rend efficace et pertinent dans cet usage. En revanche cela pose une contrainte car c'est un outil python or la doc est en next.js d'ou le besoin de découper en services.
 
-L'objectif est d'indexer la documentation pour permettre une recherche sémantique (RAG).
+## Services
 
-- VectorCode: permet de vectorialiser une documentation et de réaliser des query qui renverront les éléments pertinents dans la documentation.
-- Utiliser un LLM d'embedding tel que MiniLM-L6 de sentence-transformers
+- Next.js: interface utilisateur (existe déjà) pour remplacer Chainlit utilisé dans mon prototype
+- API dédiée: exécute vectorcode et renvoie le résultat à un IA qui génère une réponse à l'utilisateur (donc API REST simple)
 
-| Choix | Avantages | Inconvénients |
-| ----- | --------- | ------------- |
-| VectorCode | Spécialisé dans l'indexation de code (connait les structures). Interface CLI simple. Utilise des LLM performants. | Projet encore en beta donc potentiels changements majeurs à prévoir dans le futur. |
-| LLM d'embedding | Plus de documentation et grande communauté. Permet un contrôle total sur le chunking des documents | Pas spécialisé, nécessite davantage d'outils pour faire fonctionner. (Serveur Qdrant par exemple). Plus grande complexité. |
+> Note: La persistance de la documentation indexée est possible grâce à un volume docker ou une bdd vectorielle (ChromaDB ou Qdrant par exemple)
 
-> Choix réalisé pour le prototype: VectorCode (utilisant ChromaBD)
+## Fonctionnement théorique
 
-## Récupérer la documentation
+1. Envoi d'un message au ChatBot : requête à l'API
+2. Recherche dans les données indexées grâce à VectorCode en utilisant le prompt de l'utilisateur.
+3. Appel d'une IA pour construire une réponse à partir du prompt de l'utilisateur et des données qui ont été query.
+4. Renvoyer la réponse à l'utilisateur -> affichage
 
-La documentation est disponible sur [GitHub](https://github.com/api-platform/docs). Possibilité de `clone` et `pull` le repository.
+## Réaliser l'API
 
-## Interface Utilisateur
+Différents choix d'API :
+- FastAPI
+- Flask
+- Django REST Framework (DRF)
 
-Afin de permettre une utilisation simple pour l'utilisateur, de nombreux choix sont disponibles
+FastAPI semble le plus adapté car très rapide (VectorCode nécessite du temps pour retrieve les données, la génération du message aussi). FastAPI permet aussi de valider la structure des données (ajoute de la sécurité j'imagine). Il est facile à déployer, optimisé pour les appels concurrents et très léger donc idéal pour un service.
 
-| Choix | Avantages | Inconvénients |
-| ----- | --------- | ------------- |
-| Chainlit | Très rapide pour prototyper. Historique de chat, gestion de réglages utilisateur (sélection de modèle par exemple). | Peu de flexibilité graphique. Dépendences python prédéfinies (Engine.IO/Socker.IO) qui peuvent causer des erreurs |
-| OpenUI | Permet à l'IA de générer l'interface elle même. | Encore très récent, documentation limitée. |
-| Développer soi-même | Libertée totale. Architecture en micro-service "standard" (API Backend et Frontend) | Nécessite de maintenir deux projets. Plus de temps nécessaire. |
+Flask est léger mais moins adapté aux longs temps d'attente (ce qui ne colle pas avec le temps de retrieve et la génération du message). Pas optimisé pour les opérations asynchrones donc risque de ralentissement ?
 
-> Choix réalisé pour le prototype: Chainlit
+DRF est conçu pour les applications avec énorméments de données (grosse application web). Il est très puissant mais trop lourd pour un chatbot selon moi car dépendances inutiles et complexifie la conteneurisation
 
-## Procédure du prototype
+> FastAPI semble l'option la plus viable pour ce projet.
 
-Un conteneur Docker permet de faire fonctionner le prototype. Ce dernier tourne sous l'image Python 3.11-slim (une image légère à la version requise par VectorCode). Un volume est attribué afin de ne pas devoir re-télécharger la documentation à chaque exécution du conteneur. Des fichiers nécessaires au fonctionnement du prototype sont copiés dans le conteneur (tel que `requirements.txt`).
+## Ce qu'il manque
 
-Le conteneur va tout d'abord installer **git** puis les dépendances nécessaires à faire tourner le programme dans le fichier `app.py`. Une fois cela réalisé il utilisera le script `start.sh`. Ce script vérifie si la documentation est déjà téléchargée. Si la documentation est téléchargée, elle est mise à jour, sinon elle est téléchargée. Ensuite, la documentation est vectorialisée par VectorCode qui enverra les vecteurs dans ChromaDB. Chainlit est ensuite démarré sous le port **2424**.
+Évaluer la qualité des réponses, trouver le bon modèle et bien le pré-prompter (lui préciser son rôle et les règles qu'il doit suivre)
 
-Le script python `app.py` appelé dans la commande de démarrage de Chainlit cherche dans le fichier `.env` une clé [API Google](https://aistudio.google.com/) (GOOGLE_API_KEY). Lorsqu'un message est envoyé sur l'interface de Chainlit, la commande de query de VectorCode est appelée. VectorCode renverra les documents qui seront envoyés à Gemini (modèle choisi en raison d'un accès gratuit simple pour prototyper). Gemini répondra au message de en utilisant et appliquant les données que VectorCode a renvoyé précédemment au contexte demandé par l'utilisateur.
+# Liens
 
-## Utiliser le prototype
+[VectorCode](https://github.com/Davidyz/VectorCode)
+[FastAPI](https://fastapi.tiangolo.com/)
+[Flask](https://flask.palletsprojects.com/)
+[DRF](https://www.django-rest-framework.org/)
 
-1. Lancez le docker
-```sh
-docker compose up -d --build
-```
+## A etudier davantage
 
-2. Ouvrez votre navigateur et rendez-vous sur l'URL
-```
-http://localhost:2424
-```
-
-## Sources et références
-
-- [VectorCode](https://github.com/Davidyz/VectorCode)
-- [LLMs Sentence Transformers](https://sbert.net/)
-- [Chainlit](https://docs.chainlit.io/)
-- [OpenUI](https://github.com/wandb/openui)
-- [Streamlit](https://streamlit.io/)
+[Routes API Nextjs](https://nextjs.org/docs/pages/building-your-application/routing/api-routes)
+[Assurance de Qualité - Evaluation des IA](https://afup.org/talks/5235-l-evaluation-des-ias-la-recette-secrete-des-agents-pas-trop-betes)
+[Assurance de Qualité - Métrique RAG](https://docs.ragas.io/en/latest/)
