@@ -1,80 +1,87 @@
+import streamlit as st
 import os
 import subprocess
-import json
-import asyncio
 import ollama
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
 
-app = FastAPI()
+st.set_page_config(page_title="ChatBot API Platform", page_icon="logo.png", layout="centered")
 
-MODEL_ID = "qwen2.5-coder:1.5b"
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-client = ollama.AsyncClient(host=OLLAMA_HOST)
+def search_vectorcode(query):
+    try:
+        result = subprocess.run(["vectorcode", "query", query], capture_output=True, text=True)
+        clean_lines = [l for l in result.stdout.strip().split('\n') if "querying" not in l.lower() and l.strip()]
+        return "\n".join(clean_lines)
+    except Exception:
+        return ""
 
-async def search_vectorcode_async(query):
-    def run_command():
-        try:
-            result = subprocess.run(["vectorcode", "query", query], capture_output=True, text=True)
-            output = result.stdout.strip()
-            clean_lines = [l for l in output.split('\n') if "querying" not in l.lower() and l.strip()]
-            return "\n".join(clean_lines)
-        except: return "Erreur recherche."
-    return await asyncio.to_thread(run_command)
-
-@app.get("/v1/models")
-async def list_models():
-    return {"data": [{"id": "api-platform-bot"}]}
-
-@app.post("/v1/chat/completions")
-async def chat_handler(request: Request):
-    data = await request.json()
-    user_query = data["messages"][-1]["content"]
+with st.sidebar:
+    st.header("Actions")
     
-    context = await search_vectorcode_async(user_query)
-    
-    prompt = f"""
-        <instructions>
-        Tu es un expert API Platform. 
-        Ta mission est d'aider l'utilisateur en utilisant UNIQUEMENT le contexte documentaire ci-dessous.
-        Si la solution n'est pas dans le contexte, indique-le poliment.
-        Réponds dans la langue utilisée par l'utilisateur, avec du code PHP 8.2+ propre (attributs).
-        </instructions>
+    if st.button("Nouvelle conversation", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+        
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
+        if st.button("Régénérer la dernière réponse", use_container_width=True):
+            st.session_state.messages.pop()
+            st.rerun()
 
-        <context>
-        {context}
-        </context>
+st.title("ChatBot API Platform")
 
-        <user_question>
-        {user_query}
-        </user_question>
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-        Réponse technique :
-    """
+if prompt := st.chat_input("Votre question technique..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    async def stream_gen():
-        try:
-            async for chunk in await client.chat(
-                model=MODEL_ID,
-                messages=[
-                    {'role': 'system', 'content': 'Tu es un expert API Platform. Tu réponds de manière concise et technique.'},
-                    {'role': 'user', 'content': prompt}
-                ],
+    with st.chat_message("assistant"):
+        response_placeholder = st.empty()
+        full_response = ""
+        
+        with st.status("Recherche et analyse...", expanded=True) as status:
+            context = search_vectorcode(prompt)
+            
+            if context:
+                with st.expander("Voir le contexte documentaire"):
+                    st.code(context, language="markdown")
+            
+            client = ollama.Client(host=os.getenv("OLLAMA_HOST", "http://ollama:11434"))
+            
+            full_prompt = f"""
+            <instructions>
+            Tu es un expert API Platform 3 (Symfony). 
+            Utilise UNIQUEMENT le contexte documentaire ci-dessous.
+            Si la réponse n'est pas dans le contexte, dis-le.
+            Réponds en français avec du code PHP 8.2+ (attributs).
+            </instructions>
+
+            <context>
+            {context}
+            </context>
+
+            <question>
+            {prompt}
+            </question>
+            """
+
+            stream = client.chat(
+                model="qwen2.5-coder:1.5b",
+                messages=[{'role': 'user', 'content': full_prompt}],
                 stream=True,
-            ):
+            )
+            
+            for chunk in stream:
                 content = chunk['message']['content']
                 if content:
-                    payload = {"choices": [{"delta": {"content": content}, "finish_reason": None}]}
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    full_response += content
+                    response_placeholder.markdown(full_response + "▌")
             
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'choices': [{'delta': {'content': f'Erreur Ollama: {e}'}}]})}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(stream_gen(), media_type="text/event-stream")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=2424)
+            status.update(label="Réponse terminée", state="complete", expanded=False)
+        
+        response_placeholder.markdown(full_response)
+        st.session_state.messages.append({"role": "assistant", "content": full_response})

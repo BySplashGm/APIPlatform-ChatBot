@@ -22,7 +22,6 @@ echo "================================="
 echo "Waiting for Ollama to be ready..."
 echo "================================="
 
-
 until curl -s http://ollama:11434/api/tags > /dev/null; do
   echo "Ollama is still starting..."
   sleep 2
@@ -31,8 +30,12 @@ done
 echo "Pulling model qwen2.5-coder:1.5b..."
 curl -X POST http://ollama:11434/api/pull -d "{\"name\": \"qwen2.5-coder:1.5b\"}"
 
-echo "==============================================="
-echo "Starting FastAPI Backend for Open WebUI on 2424"
-echo "==============================================="
+echo "==================================="
+echo "Starting Streamlit App on port 2424"
+echo "==================================="
 
-uvicorn app:app --host 0.0.0.0 --port 2424 --reload
+streamlit run app.py \
+    --server.port 2424 \
+    --server.address 0.0.0.0 \
+    --server.headless true \
+    --server.fileWatcherType auto
