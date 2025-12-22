@@ -8,21 +8,31 @@ if [ ! -d "$DOCS_DIR/.git" ]; then
     echo "=========================="
     git clone https://github.com/api-platform/docs.git $DOCS_DIR
     echo "Indexing files..."
-    vectorcode vectorise $DOCS_DIR
+    vectorcode vectorise $DOCS_DIR/**/*.md
 else
     echo "===================================="
     echo "Docs already downloaded. Updating..."
     echo "===================================="
-    
-    cd $DOCS_DIR
-    git pull
-    cd ..
-    
+    cd $DOCS_DIR && git pull && cd ..
     echo "Reindexing updated files..."
     vectorcode vectorise $DOCS_DIR/**/*.md
 fi
 
-echo "======================================"
-echo "Starting Chatbot Chainlit on port 2424"
-echo "======================================"
-chainlit run app.py --port 2424 --host 0.0.0.0
+echo "================================="
+echo "Waiting for Ollama to be ready..."
+echo "================================="
+
+
+until curl -s http://ollama:11434/api/tags > /dev/null; do
+  echo "Ollama is still starting..."
+  sleep 2
+done
+
+echo "Pulling model qwen2.5-coder:1.5b..."
+curl -X POST http://ollama:11434/api/pull -d "{\"name\": \"qwen2.5-coder:1.5b\"}"
+
+echo "==============================================="
+echo "Starting FastAPI Backend for Open WebUI on 2424"
+echo "==============================================="
+
+uvicorn app:app --host 0.0.0.0 --port 2424 --reload

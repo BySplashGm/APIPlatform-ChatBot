@@ -1,23 +1,42 @@
 version: '3.8'
 
 services:
-  chatbot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: api-platform-chatbot
-    
-    ports:
-      - "2424:2424"
-      
+  chatbot-logic:
+    build: .
+    container_name: api-platform-backend
     volumes:
+      - .:/app
       - docs_data:/app/api-platform-docs
-      
-    env_file:
-      - .env
-      
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      - 'OPENAI_API_BASE_URLS=http://chatbot-logic:2424/v1'
+      - 'OPENAI_API_KEYS=sk-fake-key'
+      - 'WEBUI_NAME=API Platform Chatbot'
+      - 'WEBUI_URL=http://localhost:3000'
+      - 'WEBUI_AUTH=False'
+      - 'ENABLE_SIGNUP=False'
+      - 'DEFAULT_USER_ROLE=user'
+      - 'SHOW_ADMIN_DETAILS=False'
+      - 'ENABLE_MODEL_FILTERING=False'
+      - 'MODEL_FILTER_LIST=api-platform-bot'
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
 volumes:
   docs_data:
-    driver: local
+  ollama_data:
+  open-webui-data:
