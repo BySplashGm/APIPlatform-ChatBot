@@ -16,19 +16,8 @@ def search_vectorcode(query):
     except Exception:
         return ""
 
-with st.sidebar:
-    st.header("Actions")
-    
-    if st.button("Nouvelle conversation", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
-        
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-        if st.button("Régénérer la dernière réponse", use_container_width=True):
-            st.session_state.messages.pop()
-            st.rerun()
-
 st.title("ChatBot API Platform")
+st.caption("Posez vos questions à propos de la documentation.")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
