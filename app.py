@@ -43,10 +43,10 @@ if prompt := st.chat_input("Votre question technique..."):
             
             full_prompt = f"""
             <instructions>
-            Tu es un expert API Platform 3 (Symfony). 
+            Tu es un expert API Platform. 
             Utilise UNIQUEMENT le contexte documentaire ci-dessous.
             Si la réponse n'est pas dans le contexte, dis-le.
-            Réponds en français avec du code PHP 8.2+ (attributs).
+            Réponds avec du code PHP 8.
             </instructions>
 
             <context>
