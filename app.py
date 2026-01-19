@@ -37,9 +37,9 @@ async def chat_handler(request: Request):
     prompt = f"""
         <instructions>
         Tu es un expert API Platform. 
-        Ta mission est d'aider l'utilisateur en utilisant UNIQUEMENT le contexte documentaire ci-dessous.
-        Si la solution n'est pas dans le contexte, indique-le poliment.
-        Réponds dans la langue utilisée par l'utilisateur, avec du code PHP 8.2+ propre (attributs).
+            Utilise UNIQUEMENT le contexte documentaire ci-dessous.
+            Si la réponse n'est pas dans le contexte, dis-le.
+            Réponds avec du code PHP 8.
         </instructions>
 
         <context>
