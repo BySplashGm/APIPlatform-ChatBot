@@ -1,1 +1,5 @@
 /.env
+/assets/
+/docs/
+/var/
+/vendor/
