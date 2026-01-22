@@ -1,0 +1,4 @@
+ai:
+    platform:
+        ollama:
+            host_url: '%env(OLLAMA_URL)%'

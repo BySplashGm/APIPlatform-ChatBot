@@ -1,5 +1,0 @@
-# ApiPlatformChatBot
-
-test
-
-> test
