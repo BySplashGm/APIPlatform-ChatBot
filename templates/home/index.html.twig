@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Symfony AI ChatBot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .typing::after { content: '▋'; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col items-center justify-center font-sans">
+
+    <div class="w-full max-w-3xl h-[80vh] flex flex-col bg-gray-800 rounded-xl shadow-2xl overflow-hidden border border-gray-700">
+        <div class="p-4 bg-gray-900 border-b border-gray-700 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-blue-400">🤖 Symfony RAG Bot</h1>
+            <span class="text-xs text-gray-500">Powered by Ollama & API Platform</span>
+        </div>
+
+        <div id="chat-box" class="flex-1 p-6 overflow-y-auto space-y-4">
+            <div class="text-center text-gray-500 text-sm my-4">Posez une question sur la documentation...</div>
+        </div>
+
+        <form id="chat-form" class="p-4 bg-gray-900 border-t border-gray-700 flex gap-2">
+            <input type="text" id="user-input" 
+                class="flex-1 bg-gray-800 text-white border border-gray-600 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500 transition"
+                placeholder="Ex: Comment créer un Custom Provider ?" autocomplete="off">
+            <button type="submit" 
+                class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg font-semibold transition flex items-center gap-2">
+                Envoyer ➤
+            </button>
+        </form>
+    </div>
+
+    <script>
+        const chatBox = document.getElementById('chat-box');
+        const chatForm = document.getElementById('chat-form');
+        const userInput = document.getElementById('user-input');
+
+        function appendMessage(role, text) {
+            const div = document.createElement('div');
+            div.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-[80%] rounded-2xl px-4 py-2 ${
+                role === 'user' 
+                ? 'bg-blue-600 text-white rounded-br-none' 
+                : 'bg-gray-700 text-gray-100 rounded-bl-none shadow-md'
+            }`;
+            bubble.innerHTML = text; // Attention XSS en prod, ici c'est ok pour le test
+            
+            div.appendChild(bubble);
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return bubble;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            // 1. Afficher message user
+            appendMessage('user', message);
+            userInput.value = '';
+
+            // 2. Préparer bulle réponse
+            const botBubble = appendMessage('assistant', '<span class="typing"></span>');
+
+            try {
+                // 3. Appel API
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ messages: [{ role: 'user', content: message }] })
+                });
+
+                if (!response.ok || !response.body) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResponse = "";
+                
+                // 4. Lecture du Stream
+                botBubble.innerHTML = ""; // On enlève le curseur
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    fullResponse += chunk;
+                    
+                    // Simple conversion Markdown -> HTML basique (pour les sauts de ligne et gras)
+                    const formatted = fullResponse
+                        .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+                        .replace(/\n/g, '<br>');
+
+                    botBubble.innerHTML = formatted;
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+
+            } catch (err) {
+                botBubble.innerText = "Erreur : " + err.message;
+            }
+        });
+    </script>
+</body>
+</html>

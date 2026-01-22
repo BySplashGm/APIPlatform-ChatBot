@@ -1,0 +1,31 @@
+services:
+###> doctrine/doctrine-bundle ###
+  database:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-!ChangeMe!}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-d", "${POSTGRES_DB:-app}", "-U", "${POSTGRES_USER:-app}"]
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - database_data:/var/lib/postgresql/data:rw
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+###< doctrine/doctrine-bundle ###
+
+volumes:
+###> doctrine/doctrine-bundle ###
+  database_data:
+  ollama_data: # Ne pas oublier de déclarer le volume pour Ollama
+###< doctrine/doctrine-bundle ###
