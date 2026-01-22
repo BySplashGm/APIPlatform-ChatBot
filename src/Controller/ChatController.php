@@ -8,12 +8,13 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Attribute\AsController;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 
 #[AsController]
 class ChatController
 {
     private const EMBEDDING_MODEL = 'nomic-embed-text';
-    private const CHAT_MODEL = 'qwen2.5-coder:1.5b';
+    private const CHAT_MODEL = 'mistral';
 
     public function __construct(
         private HttpClientInterface $httpClient,
@@ -23,16 +24,23 @@ class ChatController
     #[Route('/chat', methods: ['POST'])]
     public function __invoke(Request $request): StreamedResponse
     {
+        set_time_limit(0);
+
         $data = $request->toArray();
         $userMessage = end($data['messages'])['content'] ?? '';
 
-        $embResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-            'json' => [
-                'model' => self::EMBEDDING_MODEL,
-                'input' => $userMessage,
-            ],
-        ]);
-        $vector = $embResponse->toArray()['embeddings'][0];
+        try {
+            $embResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
+                'json' => [
+                    'model' => self::EMBEDDING_MODEL,
+                    'input' => $userMessage,
+                ],
+            ]);
+            $vector = $embResponse->toArray()['embeddings'][0];
+        } catch (\Exception $e) {
+            return new StreamedResponse(function() { echo "Erreur lors de la vectorisation."; }, 500);
+        }
+
         $vectorStr = '[' . implode(',', $vector) . ']';
 
         $conn = $this->entityManager->getConnection();
@@ -62,9 +70,13 @@ class ChatController
 
         $ollamaResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
             'buffer' => false,
-            'timeout' => 300, // 5 minutes
+            'timeout' => 600,
             'json' => [
                 'model' => self::CHAT_MODEL,
+                'options' => [
+                    'temperature' => 0.0,
+                    'num_ctx' => 4096
+                ],
                 'messages' => [
                     ['role' => 'system', 'content' => $systemPrompt],
                     ['role' => 'user', 'content' => $userMessage]
@@ -75,66 +87,61 @@ class ChatController
         $client = $this->httpClient;
 
         $response = new StreamedResponse(function() use ($ollamaResponse, $client) {
-            // Désactiver complètement le buffering
             if (function_exists('apache_setenv')) {
                 apache_setenv('no-gzip', '1');
             }
             @ini_set('zlib.output_compression', 'Off');
             @ini_set('output_buffering', 'Off');
-            
-            // Vider tous les buffers existants
             while (ob_get_level() > 0) {
                 ob_end_clean();
             }
-            
-            // Activer le flush implicite
             ob_implicit_flush(true);
 
             $buffer = '';
 
-            foreach ($client->stream($ollamaResponse) as $chunk) {
-                if ($chunk->isFirst() || $chunk->isLast()) {
-                    continue;
-                }
-
-                $buffer .= $chunk->getContent();
-
-                // Parser ligne par ligne
-                while (($pos = strpos($buffer, "\n")) !== false) {
-                    $line = substr($buffer, 0, $pos);
-                    $buffer = substr($buffer, $pos + 1);
-
-                    if (empty(trim($line))) {
+            try {
+                foreach ($client->stream($ollamaResponse) as $chunk) {
+                    
+                    if ($chunk->isTimeout()) {
                         continue;
                     }
 
-                    $json = json_decode($line, true);
-                    if (isset($json['message']['content'])) {
-                        $text = $json['message']['content'];
-                        echo $text;
+                    try {
+                        $content = $chunk->getContent();
+                    } catch (TransportExceptionInterface $e) {
+                        break;
+                    }
+
+                    $buffer .= $content;
+
+                    while (($pos = strpos($buffer, "\n")) !== false) {
+                        $line = substr($buffer, 0, $pos);
+                        $buffer = substr($buffer, $pos + 1);
+
+                        if (trim($line) === '') continue;
+
+                        $json = json_decode($line, true);
                         
-                        // Double flush pour forcer l'envoi
-                        if (connection_status() !== CONNECTION_NORMAL) {
+                        if (is_array($json) && isset($json['message']['content'])) {
+                            echo $json['message']['content'];
+                            flush();
+                        }
+                        
+                        if (isset($json['done']) && $json['done'] === true) {
                             break 2;
                         }
-                        flush();
+                    }
+                    
+                    if (connection_aborted()) {
+                        break;
                     }
                 }
-            }
-
-            // Reste du buffer
-            if (!empty(trim($buffer))) {
-                $json = json_decode($buffer, true);
-                if (isset($json['message']['content'])) {
-                    echo $json['message']['content'];
-                    flush();
-                }
+            } catch (\Exception $e) {
             }
         });
 
         $response->headers->set('Content-Type', 'text/event-stream');
         $response->headers->set('Cache-Control', 'no-cache');
-        $response->headers->set('Connection', 'keep-alive');
         $response->headers->set('X-Accel-Buffering', 'no');
 
         return $response;
