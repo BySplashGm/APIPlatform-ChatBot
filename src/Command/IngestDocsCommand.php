@@ -8,10 +8,11 @@ use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Input\InputOption; // Add this line
 use Symfony\Component\Finder\Finder;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
-#[AsCommand(name: 'app:ingest', description: 'Indexe la documentation avec découpage (Chunking)')]
+#[AsCommand(name: 'app:ingest', description: 'Documentation indexing using chunks')]
 class IngestDocsCommand extends Command
 {
     private const EMBEDDING_MODEL = 'nomic-embed-text';
@@ -26,25 +27,43 @@ class IngestDocsCommand extends Command
 
     protected function configure(): void
     {
-        $this->addArgument('folder', InputArgument::REQUIRED, 'Dossier des docs');
+        $this->addArgument('folder', InputArgument::REQUIRED, 'Docs folder');
+        $this->addOption('clear', null, InputOption::VALUE_NONE, 'Clear the base before indexing');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $folder = $input->getArgument('folder');
+
+        $conn = $this->entityManager->getConnection();
+
+        if ($input->getOption('clear')) {
+            $conn->executeStatement("TRUNCATE TABLE vector_store");
+            $output->writeln("<info>Base emptied</info>");
+        }
+        $folder = $input->getArgument('folder');
         
         if (!is_dir($folder)) {
-            $output->writeln("<error>Dossier introuvable</error>");
+            $output->writeln("<error>Folder not found</error>");
             return Command::FAILURE;
         }
 
         $conn = $this->entityManager->getConnection();
         $finder = new Finder();
-        $finder->in($folder)->files()->name(['*.md', '*.mdx']);
+        $finder->in($folder)->files()->name(['*.php', '*.md', '*.mdx']);
 
-        $output->writeln("Démarrage indexation (Mode Chunking) avec : " . self::EMBEDDING_MODEL);
+        $output->writeln("Indexing using: " . self::EMBEDDING_MODEL);
 
+        $conn = $this->entityManager->getConnection();
         $conn->executeStatement("TRUNCATE TABLE vector_store");
+
+        $fileCount = $finder->count();
+        $output->writeln("Fichiers trouvés : $fileCount");
+
+        if ($fileCount === 0) {
+            $output->writeln("<warning>No .md, .mdx or .php file found in folder</warning>");
+            return Command::SUCCESS;
+        }
 
         foreach ($finder as $file) {
             $fullContent = $file->getContents();
@@ -52,7 +71,7 @@ class IngestDocsCommand extends Command
             
             $chunks = $this->splitText($fullContent, self::CHUNK_SIZE);
             
-            $output->write("Indexation de $filename (" . count($chunks) . " chunks)... ");
+            $output->write("Indexing $filename (" . count($chunks) . " chunks)... ");
             
             foreach ($chunks as $index => $chunk) {
                 try {
@@ -83,7 +102,7 @@ class IngestDocsCommand extends Command
                     ]);
 
                 } catch (\Exception $e) {
-                    $output->writeln("\n<error>Erreur sur le chunk $index de $filename : " . $e->getMessage() . "</error>");
+                    $output->writeln("\n<error>Error on chunk $index from $filename : " . $e->getMessage() . "</error>");
                 }
             }
             $output->writeln("<info>OK</info>");
