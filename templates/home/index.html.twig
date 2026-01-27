@@ -11,7 +11,7 @@
         .typing::after { content: '▋'; animation: blink 1s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* Styles pour le Markdown */
+        /* Styles for Markdown */
         .markdown-content h1, .markdown-content h2, .markdown-content h3 {
             font-weight: bold;
             margin-top: 1rem;
@@ -99,22 +99,22 @@
         </div>
 
         <div id="chat-box" class="flex-1 p-6 overflow-y-auto space-y-4">
-            <div class="text-center text-gray-500 text-sm my-4">Posez une question sur la documentation...</div>
+            <div class="text-center text-gray-500 text-sm my-4">Ask a question about the documentation...</div>
         </div>
 
         <form id="chat-form" class="p-4 bg-gray-900 border-t border-gray-700 flex gap-2">
             <input type="text" id="user-input" 
                 class="flex-1 bg-gray-800 text-white border border-gray-600 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500 transition"
-                placeholder="Ex: Comment créer un Custom Provider ?" autocomplete="off">
+                placeholder="Ex: How to create a Custom Provider?" autocomplete="off">
             <button type="submit" 
                 class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg font-semibold transition flex items-center gap-2">
-                Envoyer ➤
+                Send ➤
             </button>
         </form>
     </div>
 
     <script>
-        // Configuration de marked pour supporter les blocs de code avec highlight.js
+        // Configure marked to support code blocks with highlight.js
         marked.setOptions({
             highlight: function(code, lang) {
                 if (lang && hljs.getLanguage(lang)) {
@@ -132,7 +132,7 @@
         const chatForm = document.getElementById('chat-form');
         const userInput = document.getElementById('user-input');
 
-        // Fonction pour appliquer la coloration syntaxique
+        // Function to apply syntax highlighting
         function highlightCodeBlocks(element) {
             element.querySelectorAll('pre code').forEach((block) => {
                 hljs.highlightElement(block);
@@ -167,15 +167,15 @@
             const message = userInput.value.trim();
             if (!message) return;
 
-            // 1. Afficher message user
+            // 1. Display user message
             appendMessage('user', message);
             userInput.value = '';
 
-            // 2. Préparer bulle réponse
+            // 2. Prepare response bubble
             const botBubble = appendMessage('assistant', '<span class="typing"></span>');
 
             try {
-                // 3. Appel API
+                // 3. API Call
                 const response = await fetch('/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -189,8 +189,8 @@
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let fullResponse = "";
-                
-                // 4. Lecture du Stream
+                    
+                // 4. Stream Reading
                 botBubble.innerHTML = "";
                 botBubble.className += ' markdown-content';
 
@@ -201,14 +201,14 @@
                     const chunk = decoder.decode(value, { stream: true });
                     fullResponse += chunk;
                     
-                    // Conversion Markdown -> HTML avec marked.js
+                    // Markdown -> HTML conversion with marked.js
                     try {
                         const formatted = marked.parse(fullResponse);
                         botBubble.innerHTML = formatted;
-                        // Appliquer la coloration syntaxique
+                        // Apply syntax highlighting
                         highlightCodeBlocks(botBubble);
                     } catch (err) {
-                        // En cas d'erreur de parsing, afficher le texte brut
+                        // In case of parsing error, display raw text
                         botBubble.innerText = fullResponse;
                     }
 
@@ -216,7 +216,7 @@
                 }
 
             } catch (err) {
-                botBubble.innerText = "Erreur : " + err.message;
+                botBubble.innerText = "Error: " + err.message;
             }
         });
     </script>
