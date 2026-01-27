@@ -1,86 +1,124 @@
-# Prototype ChatBot API Platform
+# API Platform RAG ChatBot
 
-Réalisation d'un prototype de ChatBot RAG (Retrieval-Augmented Generation) pour la documentation d'API Platform, propulsé par **Symfony** et **Ollama**.
+A Retrieval-Augmented Generation (RAG) chatbot for API Platform documentation, powered by Symfony and Ollama.
 
-## Sommaire
-- [Architecture Technique](#architecture-technique)
-- [Le Pipeline RAG](#le-pipeline-rag)
-- [Choix Techniques](#choix-techniques)
-- [Prérequis](#prérequis)
-- [Installation et Utilisation](#installation-et-utilisation)
-- [Fonctionnement détaillé](#fonctionnement-détaillé)
-- [Sources et références](#sources-et-références)
+## Overview
 
-## Architecture Technique
+This prototype demonstrates how to build a local AI-powered chatbot that answers questions about API Platform using only official documentation as context. No cloud APIs required - everything runs locally via Docker.
 
-Ce prototype n'utilise aucune API cloud payante. Tout tourne en local via Docker.
+**Tech Stack:**
+- Backend: Symfony 7.4 (PHP 8.2+)
+- LLM: Mistral 7B (via Ollama)
+- Embeddings: Nomic Embed Text (via Ollama)
+- Database: PostgreSQL 16 + pgvector extension
+- Frontend: Twig + TailwindCSS + Server-Sent Events
 
-* **Framework :** Symfony 7.4 (PHP 8.2+)
-* **LLM (Chat) :** Mistral 7B (via Ollama)
-* **Embeddings :** Nomic Embed Text (via Ollama)
-* **Base de données :** PostgreSQL 16 + extension `pgvector`
-* **Frontend :** Twig, TailwindCSS, Vanilla JS (Streaming SSE)
+## Prerequisites
 
-## Le Pipeline RAG
+- Docker & Docker Compose
+- Minimum 16GB RAM (8GB allocated to Docker recommended)
 
-L'objectif est de permettre à une IA de répondre à des questions techniques en se basant uniquement sur la documentation officielle.
+## Quick Start
 
-1.  **Ingestion :** Une commande Symfony scanne les fichiers Markdown, les découpe en morceaux (chunks) et calcule leurs vecteurs mathématiques.
-2.  **Stockage :** Les vecteurs et le texte sont stockés dans PostgreSQL.
-3.  **Recherche :** Lors d'une question, on compare le vecteur de la question avec ceux de la base (recherche de similarité cosinus).
-4.  **Génération :** On envoie le contexte trouvé à Mistral avec des instructions strictes pour générer la réponse.
+### 1. Start the stack
 
-## Choix Techniques
-
-| Composant | Choix | Pourquoi ? |
-| :--- | :--- | :--- |
-| **Backend** | **Symfony** | Intégration robuste via `HttpClient`. Contrôle total sur le flux de données et la gestion des timeouts. |
-| **Moteur IA** | **Ollama** | Permet de faire tourner des modèles Open Source (Mistral, Llama 3) en local, gratuitement et sans fuite de données. |
-| **Vector Store** | **PostgreSQL (pgvector)** | Évite d'avoir une base de données vectorielle séparée (comme Chroma ou Qdrant). Permet de garder les données relationnelles et vectorielles au même endroit. |
-| **Interface** | **Twig + JS** | Solution légère et intégrée. Utilisation de *Server-Sent Events* (SSE) pour afficher la réponse mot par mot (streaming). |
-
-## Prérequis
-
-* **Docker** et Docker Compose.
-* **Ressources matérielles :** Minimum 16Go de RAM recommandés pour Mistral 7B. (Nécessaire pour faire tourner Mistral 7B)
-    * *Note : Sur Mac/Windows, pensez à allouer au moins 8Go de RAM à Docker Desktop.*
-
-## Installation et Utilisation
-
-### 1. Démarrer la stack technique
-Lancez les conteneurs (PHP, Database, Ollama) :
 ```bash
 docker compose up -d --build
 ```
 
-### 2. Initialiser les modèles IA (Première fois uniquement)
-Il faut télécharger les "cerveaux" directement dans le conteneur Ollama pour qu'ils soient accessibles à l'application.
-* `nomic-embed-text` : Pour comprendre le sens du texte (Embeddings).
-* `mistral` : Pour rédiger les réponses (Chat).
+### 2. Download AI models
 
 ```bash
-# Modèle d'embedding (léger)
+# Embedding model
 docker exec -it chatbot-ollama-1 ollama pull nomic-embed-text
 
-# Modèle de chat (performant, 7B paramètres)
+# Chat model
 docker exec -it chatbot-ollama-1 ollama pull mistral
 ```
 
-### 3. Ingérer la documentation
-Cette commande va parcourir vos fichiers Markdown, les découper intelligemment et générer les vecteurs sémantiques.
+### 3. Clone documentation sources
 
 ```bash
-# Assurez-vous d'avoir cloné la documentation officielle dans le dossier docs/
-# Exemple : git clone [https://github.com/api-platform/docs.git](https://github.com/api-platform/docs.git) docs
-
-php bin/console app:ingest docs/
+git clone https://github.com/api-platform/docs.git docs
+git clone https://github.com/api-platform/core.git core
 ```
 
-### 4. Utiliser le ChatBot
-Une fois l'indexation terminée, ouvrez votre navigateur et accédez à l'interface de chat :
+### 4. Create database tables
+
+```bash
+php bin/console doctrine:migrations:migrate
+```
+
+### 5. Run your first benchmark
+
+```bash
+php bin/console app:benchmark --reindex
+```
+
+This will:
+- Index documentation into 3 separate vector stores (docs, code, combined)
+- Run 10 test questions across all 3 sources
+- Generate a CSV report with scores (0-5) for each answer
+
+### 6. Use the chatbot
+
+Open your browser: `http://127.0.0.1:8000`
+
+## How It Works
+
+### RAG Pipeline
+
+1. **Ingestion**: Documents are split into chunks and converted to 768-dimensional vectors
+2. **Storage**: Vectors are stored in PostgreSQL with pgvector extension
+3. **Retrieval**: User questions are vectorized and matched against stored chunks using cosine similarity
+4. **Generation**: Top 3 relevant chunks are sent to Mistral with strict instructions to only answer based on provided context
+
+### Benchmarking System
+
+The benchmark compares 3 documentation sources:
+
+- **docs**: Markdown documentation only
+- **code**: PHP functional tests + custom fixtures
+- **combined**: Everything merged
+
+Results include:
+- Score (0-5) evaluated by an AI judge
+- Response time in milliseconds
+- Category breakdown (basic, code, advanced, security, testing, trap)
+
+### Commands
+
+```bash
+# Index specific documentation
+php bin/console app:ingest docs/ --target=docs --clear
+
+# Run benchmark (uses existing data)
+php bin/console app:benchmark
+
+# Force re-indexing before benchmark
+php bin/console app:benchmark --reindex
+
+# Add custom files to index
+# Create liste_fichiers_a_indexer.txt with file paths (one per line)
+```
+
+## Adding Custom Documentation
+
+To include additional files in the benchmark:
+
+1. Create `liste_fichiers_a_indexer.txt` in project root
+2. Add file paths (one per line, can be absolute or relative)
+3. Run: `php bin/console app:benchmark --reindex`
+
+## Project Structure
 
 ```
-http://127.0.0.1:8000
+src/
+├── Command/
+│   ├── BenchmarkCommand.php    # Benchmark orchestration
+│   └── IngestDocsCommand.php   # Document indexing
+└── Controller/
+    └── ChatController.php      # Chat interface + SSE streaming
 ```
 *(Ou l'URL configurée sur votre environnement local).*
 
@@ -105,9 +143,15 @@ Le contrôleur orchestre le flux RAG (Retrieval-Augmented Generation) en temps r
 
 ---
 
-## Sources et références
+## Results
 
-* [Symfony HttpClient](https://symfony.com/doc/current/http_client.html)
-* [Ollama API Reference](https://github.com/ollama/ollama/blob/main/docs/api.md)
-* [pgvector : Vector similarity search for Postgres](https://github.com/pgvector/pgvector)
-* [Documentation API Platform](https://api-platform.com/docs/)
+Benchmark results are saved in `benchmark_results.csv` with:
+- Timestamp, Source, Category, Question
+- ChatBot Response, Score (0-5), Judge Reason
+- Model Used, Response Time (ms)
+
+## References
+
+- [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md)
+- [pgvector](https://github.com/pgvector/pgvector)
+- [API Platform Docs](https://api-platform.com/docs/)
