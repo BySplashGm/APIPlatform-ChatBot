@@ -17,7 +17,6 @@ class IngestDocsCommand extends Command
 {
     private const EMBEDDING_MODEL = 'nomic-embed-text';
     private const CHUNK_SIZE = 1500;
-    
     private const CODE_OVERLAP = 200; 
 
     public function __construct(
@@ -30,7 +29,7 @@ class IngestDocsCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addArgument('folder', InputArgument::REQUIRED, 'Root folder to scan')
+            ->addArgument('path', InputArgument::REQUIRED, 'File or Folder to scan')
             ->addOption('target', 't', InputOption::VALUE_OPTIONAL, 'Target table (docs, code, combined)', 'combined')
             ->addOption('clear', null, InputOption::VALUE_NONE, 'Clear database before indexing')
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be indexed without actually doing it')
@@ -41,7 +40,7 @@ class IngestDocsCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $folder = $input->getArgument('folder');
+        $path = $input->getArgument('path');
         $conn = $this->entityManager->getConnection();
         $dryRun = $input->getOption('dry-run');
         $showStats = $input->getOption('stats');
@@ -71,19 +70,28 @@ class IngestDocsCommand extends Command
             $output->writeln("<info>Database cleared.</info>");
         }
 
-        if (!is_dir($folder)) {
-            $output->writeln("<error>Folder not found: $folder</error>");
+        if (!file_exists($path)) {
+            $output->writeln("<error>Path not found: $path</error>");
             return Command::FAILURE;
         }
 
-        $finder = new Finder();
-        $finder->in($folder)
-            ->files()
-            ->name(['*.php', '*.md', '*.mdx'])
-            ->notPath($excludePaths);
-
-        $fileCount = $finder->count();
-        $output->writeln("Analyzing $fileCount files...");
+        $filesToProcess = [];
+        
+        if (is_file($path)) {
+            $filesToProcess = [new \SplFileInfo($path)];
+            $fileCount = 1;
+            $output->writeln("Indexing single file: $path");
+        } else {
+            $finder = new Finder();
+            $finder->in($path)
+                ->files()
+                ->name(['*.php', '*.md', '*.mdx'])
+                ->notPath($excludePaths);
+            
+            $filesToProcess = $finder;
+            $fileCount = $finder->count();
+            $output->writeln("Analyzing directory ($fileCount files)...");
+        }
 
         $stats = [
             'files_processed' => 0,
@@ -97,9 +105,12 @@ class IngestDocsCommand extends Command
 
         $chunkBuffer = 0;
 
-        foreach ($finder as $file) {
-            $content = $file->getContents();
-            $filename = $file->getRelativePathname();
+        foreach ($filesToProcess as $file) {
+            $content = file_get_contents($file->getRealPath());
+            $filename = ($file instanceof \Symfony\Component\Finder\SplFileInfo) 
+                ? $file->getRelativePathname() 
+                : $file->getBasename(); 
+                
             $extension = $file->getExtension();
             $chunks = [];
 
@@ -129,10 +140,7 @@ class IngestDocsCommand extends Command
             foreach ($chunks as $index => $chunkText) {
                 try {
                     $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-                        'json' => [
-                            'model' => self::EMBEDDING_MODEL,
-                            'input' => $chunkText,
-                        ],
+                        'json' => ['model' => self::EMBEDDING_MODEL, 'input' => $chunkText],
                         'timeout' => 300
                     ]);
 
@@ -157,7 +165,6 @@ class IngestDocsCommand extends Command
                         $stats['chunks_indexed']++;
                         $chunkBuffer++;
 
-                        // Show progress every batch_size chunks
                         if ($chunkBuffer >= $batchSize) {
                             $output->write(".");
                             $chunkBuffer = 0;
@@ -213,9 +220,7 @@ class IngestDocsCommand extends Command
     private function chunkMarkdownSmart(string $text, string $filename): array
     {
         $chunks = [];
-        
         $parts = preg_split('/^(#+ .*)$/m', $text, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
-
         $currentHeader = "Introduction";
         
         for ($i = 0; $i < count($parts); $i++) {
@@ -242,7 +247,6 @@ class IngestDocsCommand extends Command
     private function chunkPhpCode(string $text, string $filename): array
     {
         $text = str_replace(["\r\n", "\r"], "\n", $text);
-        
         $chunks = [];
         $length = strlen($text);
         $offset = 0;
@@ -284,9 +288,11 @@ class IngestDocsCommand extends Command
                 $currentChunk .= "\n\n" . $paragraph;
             }
         }
+        
         if (!empty($currentChunk)) {
             $chunks[] = $currentChunk;
         }
+        
         return $chunks;
     }
 }
