@@ -23,3 +23,5 @@
 /core/
 
 *.csv
+
+files_to_index.txt
