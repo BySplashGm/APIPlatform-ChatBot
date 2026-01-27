@@ -66,17 +66,83 @@ docker exec -it chatbot-ollama-1 ollama pull nomic-embed-text
 docker exec -it chatbot-ollama-1 ollama pull mistral
 ```
 
-### 3. Ingérer la documentation
-Cette commande va parcourir vos fichiers Markdown, les découper intelligemment et générer les vecteurs sémantiques.
+### 3. Préparer les données pour le benchmark
+
+Le benchmark compare 3 sources de données différentes :
+- **docs** : Documentation Markdown uniquement
+- **code** : Tests fonctionnels PHP uniquement  
+- **combined** : Documentation + Code combinés
 
 ```bash
-# Assurez-vous d'avoir cloné la documentation officielle dans le dossier docs/
-# Exemple : git clone [https://github.com/api-platform/docs.git](https://github.com/api-platform/docs.git) docs
+# Cloner les sources nécessaires
+git clone https://github.com/api-platform/docs.git docs
+git clone https://github.com/api-platform/core.git core
 
-php bin/console app:ingest docs/
+# Créer les migrations si nécessaire
+php bin/console doctrine:migrations:migrate
+
+# Option 1: Laisser le benchmark tout indexer automatiquement
+php bin/console app:benchmark
+
+# Option 2: Indexer manuellement puis lancer les tests
+php bin/console app:ingest docs/ --target=docs --clear --stats
+php bin/console app:ingest core/tests/Functional/ --target=code --clear --stats
+php bin/console app:ingest docs/ --target=combined --clear --stats
+php bin/console app:ingest core/tests/Functional/ --target=combined --stats
+
+# Lancer le benchmark sans ré-indexer
+php bin/console app:benchmark --skip-ingest
 ```
 
-### 4. Utiliser le ChatBot
+**Configuration des sources**
+
+Pour ajouter plus de chemins à indexer, modifiez le fichier `src/Command/BenchmarkCommand.php` dans la méthode `prepareVectorStores()` :
+
+```php
+$sources = [
+    'docs' => [
+        'paths' => [
+            'docs/',
+            // Ajoutez d'autres dossiers de documentation
+        ],
+        'description' => 'Documentation (Markdown)'
+    ],
+    'code' => [
+        'paths' => [
+            'core/tests/Functional/',
+            'core/src/',  // Exemple: ajouter le code source
+            // Ajoutez d'autres dossiers de code
+        ],
+        'description' => 'Code (PHP tests)'
+    ],
+    'combined' => [
+        'paths' => [
+            'docs/',
+            'core/tests/Functional/',
+            'core/src/',
+            // Listez tous les chemins à combiner
+        ],
+        'description' => 'Combined (Docs + Code)'
+    ]
+];
+```
+
+### 4. Lancer le benchmark
+
+```bash
+# Benchmark complet (indexation + tests sur 3 sources)
+php bin/console app:benchmark
+
+# Benchmark rapide (utilise les données déjà indexées)
+php bin/console app:benchmark --skip-ingest
+```
+
+**Résultats :**
+- Les résultats sont sauvegardés dans `benchmark_results.csv`
+- Chaque ligne contient : Date, Source (docs/code/combined), Catégorie, Question, Réponse, Score (0-5), Raison du juge, Modèle, Temps de réponse (ms)
+- Le benchmark teste 10 questions × 3 sources = 30 tests au total
+
+### 5. Utiliser le ChatBot
 Une fois l'indexation terminée, ouvrez votre navigateur et accédez à l'interface de chat :
 
 ```
