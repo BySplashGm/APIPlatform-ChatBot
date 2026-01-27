@@ -99,7 +99,7 @@ php bin/console app:benchmark
 php bin/console app:benchmark --reindex
 
 # Add custom files to index
-# Create liste_fichiers_a_indexer.txt with file paths (one per line)
+# Create files_to_index.txt with file paths (one per line)
 ```
 
 ## Adding Custom Documentation
