@@ -18,7 +18,7 @@ use Symfony\Component\Process\Process;
 class BenchmarkCommand extends Command
 {
     private const CSV_FILE = 'benchmark_results.csv';
-    private const FIXTURES_FILE = 'liste_fichiers_a_indexer.txt';
+    private const FIXTURES_FILE = 'files_to_index.txt';
     private const TIMEOUT = 300;
 
     private const QUESTIONS = [

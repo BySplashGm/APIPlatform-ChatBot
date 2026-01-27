@@ -106,7 +106,7 @@ php bin/console app:benchmark --reindex
 
 To include additional files in the benchmark:
 
-1. Create `liste_fichiers_a_indexer.txt` in project root
+1. Create `files_to_index.txt` in project root
 2. Add file paths (one per line, can be absolute or relative)
 3. Run: `php bin/console app:benchmark --reindex`
 
@@ -120,26 +120,6 @@ src/
 └── Controller/
     └── ChatController.php      # Chat interface + SSE streaming
 ```
-*(Ou l'URL configurée sur votre environnement local).*
-
----
-
-## Fonctionnement détaillé
-
-### Commande d'ingestion (`src/Command/IngestDocsCommand.php`)
-Le script implémente une stratégie de **Chunking (découpage)** par paragraphes. Plutôt que de découper de manière arbitraire au milieu d'une phrase, il utilise les doubles sauts de ligne pour préserver la cohérence sémantique. Chaque "chunk" est ensuite envoyé à l'API locale d'Ollama pour être transformé en un vecteur de **768 dimensions** (spécificité du modèle `nomic-embed-text`).
-
-
-
-### Le Contrôleur de Chat (`src/Controller/ChatController.php`)
-Le contrôleur orchestre le flux RAG (Retrieval-Augmented Generation) en temps réel :
-
-1. **Vectorisation de la requête** : La question utilisateur est convertie en vecteur via Ollama.
-2. **Recherche de similarité** : PostgreSQL effectue une recherche via l'opérateur `<=>` (distance cosinus) pour extraire les 3 morceaux de documentation les plus pertinents par rapport à la question.
-3. **Augmentation du Prompt** : Les morceaux de texte trouvés sont injectés dans un "System Prompt" restrictif qui force l'IA à rester factuelle et à ne pas inventer d'informations.
-4. **Streaming Robuste** : Utilisation d'un buffer PHP pour décoder les fragments JSON envoyés par Ollama et les transmettre instantanément au format SSE (Server-Sent Events) vers le frontend.
-
-
 
 ---
 
