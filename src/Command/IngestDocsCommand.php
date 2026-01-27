@@ -29,17 +29,45 @@ class IngestDocsCommand extends Command
 
     protected function configure(): void
     {
-        $this->addArgument('folder', InputArgument::REQUIRED, 'Root folder to scan');
-        $this->addOption('clear', null, InputOption::VALUE_NONE, 'Clear database before indexing');
+        $this
+            ->addArgument('folder', InputArgument::REQUIRED, 'Root folder to scan')
+            ->addOption('target', 't', InputOption::VALUE_OPTIONAL, 'Target table (docs, code, combined)', 'combined')
+            ->addOption('clear', null, InputOption::VALUE_NONE, 'Clear database before indexing')
+            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be indexed without actually doing it')
+            ->addOption('exclude', null, InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY, 'Paths to exclude', [])
+            ->addOption('stats', null, InputOption::VALUE_NONE, 'Show statistics after indexing')
+            ->addOption('batch-size', null, InputOption::VALUE_OPTIONAL, 'Number of chunks to process before showing progress', 10);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $folder = $input->getArgument('folder');
         $conn = $this->entityManager->getConnection();
+        $dryRun = $input->getOption('dry-run');
+        $showStats = $input->getOption('stats');
+        $batchSize = (int)($input->getOption('batch-size') ?? 10);
+        $target = $input->getOption('target');
+        
+        $tableName = match($target) {
+            'docs' => 'vector_store_docs',
+            'code' => 'vector_store_code',
+            'combined' => 'vector_store_combined',
+            default => throw new \InvalidArgumentException("Invalid target: $target")
+        };
 
-        if ($input->getOption('clear')) {
-            $conn->executeStatement("TRUNCATE TABLE vector_store");
+        $excludePaths = array_merge(
+            ['vendor', 'var', 'cache', '.git'],
+            $input->getOption('exclude')
+        );
+
+        if ($dryRun) {
+            $output->writeln("<comment>DRY RUN MODE - No actual indexing will occur</comment>");
+        }
+
+        $output->writeln("<info>Target table: $tableName</info>");
+
+        if ($input->getOption('clear') && !$dryRun) {
+            $conn->executeStatement("TRUNCATE TABLE $tableName");
             $output->writeln("<info>Database cleared.</info>");
         }
 
@@ -52,16 +80,30 @@ class IngestDocsCommand extends Command
         $finder->in($folder)
             ->files()
             ->name(['*.php', '*.md', '*.mdx'])
-            ->notPath(['vendor', 'var', 'cache', '.git']);
+            ->notPath($excludePaths);
 
         $fileCount = $finder->count();
         $output->writeln("Analyzing $fileCount files...");
+
+        $stats = [
+            'files_processed' => 0,
+            'chunks_created' => 0,
+            'chunks_indexed' => 0,
+            'errors' => 0,
+            'by_type' => ['CODE' => 0, 'DOC' => 0],
+            'total_size' => 0,
+            'start_time' => microtime(true)
+        ];
+
+        $chunkBuffer = 0;
 
         foreach ($finder as $file) {
             $content = $file->getContents();
             $filename = $file->getRelativePathname();
             $extension = $file->getExtension();
             $chunks = [];
+
+            $stats['total_size'] += strlen($content);
 
             if ($extension === 'php') {
                 $chunks = $this->chunkPhpCode($content, $filename);
@@ -73,7 +115,16 @@ class IngestDocsCommand extends Command
 
             if (empty($chunks)) continue;
 
+            $stats['files_processed']++;
+            $stats['chunks_created'] += count($chunks);
+            $stats['by_type'][$type] += count($chunks);
+
             $output->write("[$type] $filename (" . count($chunks) . " chunks)... ");
+
+            if ($dryRun) {
+                $output->writeln("<comment>SKIPPED (dry-run)</comment>");
+                continue;
+            }
 
             foreach ($chunks as $index => $chunkText) {
                 try {
@@ -82,6 +133,7 @@ class IngestDocsCommand extends Command
                             'model' => self::EMBEDDING_MODEL,
                             'input' => $chunkText,
                         ],
+                        'timeout' => 300
                     ]);
 
                     $embeddings = $response->toArray()['embeddings'][0] ?? null;
@@ -89,27 +141,73 @@ class IngestDocsCommand extends Command
                     if ($embeddings) {
                         $vectorStr = '[' . implode(',', $embeddings) . ']';
                         $conn->executeStatement(
-                            "INSERT INTO vector_store (content, metadata, vector) VALUES (:content, :metadata, :vector)",
+                            "INSERT INTO $tableName (content, metadata, vector) VALUES (:content, :metadata, :vector)",
                             [
                                 'content' => $chunkText,
                                 'metadata' => json_encode([
                                     'filename' => $filename,
                                     'chunk_index' => $index,
-                                    'type' => $type
+                                    'type' => $type,
+                                    'file_size' => strlen($content),
+                                    'indexed_at' => date('Y-m-d H:i:s')
                                 ]),
                                 'vector' => $vectorStr
                             ]
                         );
+                        $stats['chunks_indexed']++;
+                        $chunkBuffer++;
+
+                        // Show progress every batch_size chunks
+                        if ($chunkBuffer >= $batchSize) {
+                            $output->write(".");
+                            $chunkBuffer = 0;
+                        }
                     }
                 } catch (\Exception $e) {
-                    $output->writeln("<error>Failed</error>");
+                    $output->writeln("<error>Failed: {$e->getMessage()}</error>");
+                    $stats['errors']++;
                     continue;
                 }
             }
             $output->writeln("<info>OK</info>");
         }
 
+        $stats['duration'] = round(microtime(true) - $stats['start_time'], 2);
+
+        if ($showStats || $dryRun) {
+            $this->displayIndexingStats($output, $stats);
+        }
+
         return Command::SUCCESS;
+    }
+
+    private function displayIndexingStats(OutputInterface $output, array $stats): void
+    {
+        $output->writeln("\n<info>=== Indexing Statistics ===</info>");
+        $output->writeln("Files processed: {$stats['files_processed']}");
+        $output->writeln("Total chunks created: {$stats['chunks_created']}");
+        $output->writeln("Chunks indexed: {$stats['chunks_indexed']}");
+        $output->writeln("Errors: {$stats['errors']}");
+        $output->writeln("Code chunks: {$stats['by_type']['CODE']}");
+        $output->writeln("Doc chunks: {$stats['by_type']['DOC']}");
+        $output->writeln("Total content size: " . $this->formatBytes($stats['total_size']));
+        $output->writeln("Duration: {$stats['duration']}s");
+        
+        if ($stats['duration'] > 0) {
+            $chunksPerSecond = round($stats['chunks_indexed'] / $stats['duration'], 2);
+            $output->writeln("Speed: $chunksPerSecond chunks/second");
+        }
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB'];
+        $i = 0;
+        while ($bytes >= 1024 && $i < count($units) - 1) {
+            $bytes /= 1024;
+            $i++;
+        }
+        return round($bytes, 2) . ' ' . $units[$i];
     }
 
     private function chunkMarkdownSmart(string $text, string $filename): array
