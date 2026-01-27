@@ -5,39 +5,31 @@ namespace App\Command;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
+use Symfony\Component\Process\Process;
 
 #[AsCommand(name: 'app:benchmark', description: 'Run quality tests with different documentation sources')]
 class BenchmarkCommand extends Command
 {
     private const CSV_FILE = 'benchmark_results.csv';
+    private const FIXTURES_FILE = 'liste_fichiers_a_indexer.txt';
     private const TIMEOUT = 300;
 
     private const QUESTIONS = [
-        // Basic (2 questions essentielles)
         ['question' => "What is a State Provider?", 'category' => 'basic', 'expected' => 'Should explain State Provider concept'],
         ['question' => "How does API Platform handle serialization?", 'category' => 'basic', 'expected' => 'Should explain serialization mechanism'],
-        
-        // Code (2 questions)
         ['question' => "Give me a code example to create an API Platform entity.", 'category' => 'code', 'expected' => 'Should provide PHP code example with ApiResource'],
         ['question' => "How to implement a custom data provider?", 'category' => 'code', 'expected' => 'Should provide implementation code'],
-        
-        // Advanced (2 questions)
         ['question' => "How to create a Custom Filter?", 'category' => 'advanced', 'expected' => 'Should provide filter implementation'],
         ['question' => "How to handle validation errors (422)?", 'category' => 'advanced', 'expected' => 'Should explain 422 error handling'],
-        
-        // Security (1 question)
         ['question' => "How to secure API endpoints?", 'category' => 'security', 'expected' => 'Should explain endpoint security'],
-        
-        // Testing (1 question)
         ['question' => "How to write functional tests for API Platform?", 'category' => 'testing', 'expected' => 'Should explain functional testing'],
-        
-        // Trap (2 questions - IMPORTANT pour tester le gardien)
         ['question' => "What is the capital of Switzerland?", 'category' => 'trap', 'expected' => 'Should decline to answer or say it lacks information'],
         ['question' => "How to cook a pizza?", 'category' => 'trap', 'expected' => 'Should decline to answer'],
     ];
@@ -52,71 +44,42 @@ class BenchmarkCommand extends Command
 
     protected function configure(): void
     {
-        $this->addOption('skip-ingest', null, InputOption::VALUE_NONE, 'Skip re-indexing (use existing data)');
+        $this->addOption('reindex', null, InputOption::VALUE_NONE, 'Force re-indexing (clear and rebuild all data)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
         
-        // Banner
         $io->title('RAG Benchmark - API Platform Documentation');
         $io->text([
             'Testing chatbot quality across 3 documentation sources:',
-            '  <fg=cyan>docs</> - Markdown documentation only',
-            '  <fg=yellow>code</> - PHP functional tests only',
-            '  <fg=magenta>combined</> - Both sources merged',
+            '  <fg=cyan>docs</>     - Markdown documentation only',
+            '  <fg=yellow>code</>     - PHP functional tests + Fixtures',
+            '  <fg=magenta>combined</> - Everything merged',
             ''
         ]);
 
-        $skipIngest = $input->getOption('skip-ingest');
+        $reindex = $input->getOption('reindex');
 
-        // Vérification des tables
-        if ($skipIngest) {
-            $conn = $this->entityManager->getConnection();
-            $allTablesReady = true;
-            
-            $io->section('Checking existing data');
-            $tableData = [];
-            
-            foreach (['docs', 'code', 'combined'] as $table) {
-                $count = $conn->fetchOne("SELECT COUNT(*) FROM vector_store_$table");
-                $tableData[] = ["vector_store_$table", $count, $count > 0 ? 'OK' : 'EMPTY'];
-                if ($count == 0) {
-                    $allTablesReady = false;
-                }
-            }
-            
-            $table = new Table($output);
-            $table->setHeaders(['Table', 'Chunks', 'Status'])
-                  ->setRows($tableData);
-            $table->render();
-            
-            if (!$allTablesReady) {
-                $io->error("Some tables are empty. Run without --skip-ingest first.");
-                return Command::FAILURE;
-            }
-            
-            $io->success("All tables ready. Skipping ingestion.");
-        } else {
-            $io->section('Step 1/4: Preparing Vector Stores');
+        if ($reindex) {
+            $io->section('Step 1/4: Re-indexing Vector Stores');
             $this->prepareVectorStores($io, $output);
+        } else {
+            $io->section('Step 1/4: Checking Existing Data');
+            $this->checkExistingData($io, $output);
         }
 
-        // Préparation du CSV
         $filePath = $this->projectDir . '/' . self::CSV_FILE;
-        $fileExists = file_exists($filePath);
-        
         $fp = fopen($filePath, 'a+');
 
-        if (!$fileExists || filesize($filePath) === 0) {
+        if (!file_exists($filePath) || filesize($filePath) === 0) {
             fputcsv($fp, ['Date', 'Source', 'Category', 'Question', 'ChatBot Response', 'Score (0-5)', 'Judge Reason', 'Model Used', 'Response Time (ms)']);
         }
 
-        // Tests par source
         $sources = ['docs', 'code', 'combined'];
         $allResults = [];
-        $currentStep = $skipIngest ? 1 : 2;
+        $currentStep = 2;
         
         foreach ($sources as $source) {
             $io->section("Step $currentStep/4: Testing with '$source'");
@@ -125,28 +88,26 @@ class BenchmarkCommand extends Command
             $sourceResults = [];
             $progressBar = $io->createProgressBar(count(self::QUESTIONS));
             $progressBar->setFormat(' %current%/%max% [%bar%] %percent:3s%% | %message%');
-            $progressBar->setMessage('Starting...');
             $progressBar->start();
             
-            foreach (self::QUESTIONS as $qIndex => $questionData) {
-                $question = $questionData['question'];
-                $category = $questionData['category'];
-                $expected = $questionData['expected'];
-                
-                $shortQuestion = strlen($question) > 50 ? substr($question, 0, 47) . '...' : $question;
-                $progressBar->setMessage("[$category] $shortQuestion");
+            foreach (self::QUESTIONS as $questionData) {
+                $shortQuestion = strlen($questionData['question']) > 50 
+                    ? substr($questionData['question'], 0, 47) . '...' 
+                    : $questionData['question'];
+                    
+                $progressBar->setMessage("[{$questionData['category']}] $shortQuestion");
                 
                 $startTime = microtime(true);
-                $ragResponse = $this->askRag($question, $source);
+                $ragResponse = $this->askRag($questionData['question'], $source);
                 $responseTime = round((microtime(true) - $startTime) * 1000);
                 
-                $scoreData = $this->judgeAnswer($question, $ragResponse, $category, $expected);
+                $scoreData = $this->judgeAnswer($questionData['question'], $ragResponse, $questionData['category'], $questionData['expected']);
 
                 fputcsv($fp, [
                     date('Y-m-d H:i:s'),
                     $source,
-                    $category,
-                    $question,
+                    $questionData['category'],
+                    $questionData['question'],
                     $ragResponse,
                     $scoreData['score'],
                     $scoreData['reason'],
@@ -154,29 +115,18 @@ class BenchmarkCommand extends Command
                     $responseTime
                 ]);
 
-                $sourceResults[] = [
-                    'question' => $question,
-                    'category' => $category,
-                    'score' => $scoreData['score'],
-                    'reason' => $scoreData['reason'],
-                    'time' => $responseTime
-                ];
-                
+                $sourceResults[] = ['score' => $scoreData['score'], 'time' => $responseTime, 'category' => $questionData['category']];
                 $progressBar->advance();
             }
             
             $progressBar->finish();
             $io->newLine(2);
-            
-            // Afficher les résultats de cette source
-            $this->displaySourceResults($io, $source, $sourceResults);
-            
+            $this->displaySourceResults($io, $sourceResults);
             $allResults[$source] = $sourceResults;
         }
 
         fclose($fp);
         
-        // Statistiques finales
         $io->section('Final Statistics');
         $this->displayFinalStats($io, $allResults);
         
@@ -184,8 +134,7 @@ class BenchmarkCommand extends Command
         $io->success("Benchmark completed!");
         $io->text([
             "Results saved in: <fg=cyan>$filePath</>",
-            "Total tests: <fg=yellow>" . (count($sources) * count(self::QUESTIONS)) . "</>",
-            "Average response time: <fg=yellow>" . $this->calculateAvgTime($allResults) . "ms</>"
+            "Total tests: <fg=yellow>" . (count($sources) * count(self::QUESTIONS)) . "</>"
         ]);
         
         return Command::SUCCESS;
@@ -193,88 +142,93 @@ class BenchmarkCommand extends Command
 
     private function prepareVectorStores(SymfonyStyle $io, OutputInterface $output): void
     {
+        $fixturesPath = $this->projectDir . '/' . self::FIXTURES_FILE;
+        $fixtures = [];
+        
+        if (file_exists($fixturesPath)) {
+            $fixtures = file($fixturesPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $io->note(sprintf("Loaded %d extra fixture files from %s", count($fixtures), self::FIXTURES_FILE));
+        }
+
         $sources = [
             'docs' => [
                 'paths' => ['docs/'],
                 'description' => 'Documentation (Markdown)'
             ],
             'code' => [
-                'paths' => ['core/tests/Functional/'],
-                'description' => 'Code (PHP tests)'
+                'paths' => array_merge(['core/tests/Functional/'], $fixtures),
+                'description' => 'Code (Tests + Fixtures)'
             ],
             'combined' => [
-                'paths' => ['docs/', 'core/tests/Functional/'],
-                'description' => 'Combined (Docs + Code)'
+                'paths' => array_merge(['docs/', 'core/tests/Functional/'], $fixtures),
+                'description' => 'Combined (Docs + Tests + Fixtures)'
             ]
         ];
 
         foreach ($sources as $target => $config) {
-            $io->text("<fg=cyan>{$config['description']}</>");
+            $io->text("<fg=cyan>Target: {$target} ({$config['description']})</>");
             
-            $conn = $this->entityManager->getConnection();
             $tableName = 'vector_store_' . $target;
-            $conn->executeStatement("TRUNCATE TABLE $tableName");
+            $this->entityManager->getConnection()->executeStatement("TRUNCATE TABLE $tableName");
             
+            $progressBar = new ProgressBar($output, count($config['paths']));
+            $progressBar->setFormat(' %current%/%max% [%bar%] %percent:3s%% %message%');
+            $progressBar->start();
+
             foreach ($config['paths'] as $path) {
-                if (!is_dir($this->projectDir . '/' . $path)) {
-                    $io->warning("  Path not found: $path (skipping)");
+                $fullPath = (str_starts_with($path, '/') || str_contains($path, ':')) 
+                    ? $path 
+                    : $this->projectDir . '/' . $path;
+
+                if (!file_exists($fullPath)) {
+                    $progressBar->advance();
                     continue;
                 }
                 
-                $io->text("  -> Indexing: <fg=yellow>$path</>");
-                
-                $process = \Symfony\Component\Process\Process::fromShellCommandline(
-                    sprintf('php bin/console app:ingest %s --target=%s', escapeshellarg($path), $target),
-                    $this->projectDir
-                );
+                $progressBar->setMessage("Indexing " . basename($path));
+
+                $process = new Process([
+                    'php', 'bin/console', 'app:ingest', $fullPath, '--target=' . $target
+                ]);
                 
                 $process->setTimeout(600);
-                $process->run(function ($type, $buffer) use ($output) {
-                    // Afficher seulement les lignes importantes
-                    if (strpos($buffer, 'OK') !== false || strpos($buffer, 'chunks)') !== false) {
-                        $output->write('     ' . $buffer);
-                    }
-                });
-
-                if (!$process->isSuccessful()) {
-                    throw new \RuntimeException("Ingestion failed for $path");
-                }
+                $process->run();
+                
+                $progressBar->advance();
             }
             
-            $count = $conn->fetchOne("SELECT COUNT(*) FROM $tableName");
-            $io->text("  <fg=green>[OK] Ready with $count chunks</>\n");
+            $progressBar->finish();
+            $io->newLine();
+            
+            $count = $this->entityManager->getConnection()->fetchOne("SELECT COUNT(*) FROM $tableName");
+            $io->text("  -> <fg=green>[OK] Table '$tableName' contains $count chunks</>\n");
         }
     }
 
-    private function displaySourceResults(SymfonyStyle $io, string $source, array $results): void
+    private function checkExistingData(SymfonyStyle $io, OutputInterface $output): void
+    {
+        $conn = $this->entityManager->getConnection();
+        $tableData = [];
+        $allReady = true;
+        
+        foreach (['docs', 'code', 'combined'] as $table) {
+            $count = $conn->fetchOne("SELECT COUNT(*) FROM vector_store_$table");
+            $tableData[] = ["vector_store_$table", $count, $count > 0 ? 'OK' : 'EMPTY'];
+            if ($count == 0) $allReady = false;
+        }
+        
+        (new Table($output))->setHeaders(['Table', 'Chunks', 'Status'])->setRows($tableData)->render();
+        
+        if (!$allReady) {
+            throw new \RuntimeException("Some tables are empty. Run with --reindex first.");
+        }
+    }
+    
+    private function displaySourceResults(SymfonyStyle $io, array $results): void
     {
         $avgScore = round(array_sum(array_column($results, 'score')) / count($results), 2);
-        $avgTime = round(array_sum(array_column($results, 'time')) / count($results), 0);
-        
         $scoreColor = $avgScore >= 4 ? 'green' : ($avgScore >= 2.5 ? 'yellow' : 'red');
-        
-        $io->text([
-            "  Average Score: <fg=$scoreColor>" . $avgScore . "/5</>",
-            "  Average Time: <fg=cyan>" . $avgTime . "ms</>",
-        ]);
-        
-        // Afficher les résultats par catégorie
-        $byCategory = [];
-        foreach ($results as $result) {
-            $cat = $result['category'];
-            if (!isset($byCategory[$cat])) {
-                $byCategory[$cat] = ['scores' => [], 'count' => 0];
-            }
-            $byCategory[$cat]['scores'][] = $result['score'];
-            $byCategory[$cat]['count']++;
-        }
-        
-        $io->text("\n  By Category:");
-        foreach ($byCategory as $cat => $data) {
-            $avg = round(array_sum($data['scores']) / $data['count'], 1);
-            $color = $avg >= 4 ? 'green' : ($avg >= 2.5 ? 'yellow' : 'red');
-            $io->text("    <fg=white>" . str_pad($cat, 10) . "</>: <fg=$color>$avg/5</> ({$data['count']} tests)");
-        }
+        $io->text("  Average Score: <fg=$scoreColor>$avgScore/5</>");
     }
 
     private function displayFinalStats(SymfonyStyle $io, array $allResults): void
@@ -284,62 +238,31 @@ class BenchmarkCommand extends Command
         foreach ($allResults as $source => $results) {
             $avgScore = round(array_sum(array_column($results, 'score')) / count($results), 2);
             $avgTime = round(array_sum(array_column($results, 'time')) / count($results), 0);
-            
-            $scoreColor = $avgScore >= 4 ? 'green' : ($avgScore >= 2.5 ? 'yellow' : 'red');
-            
-            $tableData[] = [
-                $source,
-                count($results),
-                "<fg=$scoreColor>$avgScore/5</>",
-                "{$avgTime}ms"
-            ];
+            $tableData[] = [$source, count($results), "$avgScore/5", "{$avgTime}ms"];
         }
         
-        $table = new Table($io);
-        $table->setHeaders(['Source', 'Tests', 'Avg Score', 'Avg Time'])
-              ->setRows($tableData);
-        $table->render();
-    }
-
-    private function calculateAvgTime(array $allResults): int
-    {
-        $totalTime = 0;
-        $totalTests = 0;
-        
-        foreach ($allResults as $results) {
-            foreach ($results as $result) {
-                $totalTime += $result['time'];
-                $totalTests++;
-            }
-        }
-        
-        return $totalTests > 0 ? round($totalTime / $totalTests) : 0;
+        (new Table($io))->setHeaders(['Source', 'Tests', 'Avg Score', 'Time'])->setRows($tableData)->render();
     }
 
     private function askRag(string $question, string $source): string
     {
         $tableName = 'vector_store_' . $source;
-
+        
         try {
-            // A. Embedding
-            $embResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-                'json' => ['model' => 'nomic-embed-text', 'input' => $question],
+            $emb = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
+                'json' => ['model' => 'nomic-embed-text', 'input' => $question], 
                 'timeout' => self::TIMEOUT
             ]);
-            $vector = $embResponse->toArray()['embeddings'][0];
-            $vectorStr = '[' . implode(',', $vector) . ']';
+            $vectorStr = '[' . implode(',', $emb->toArray()['embeddings'][0]) . ']';
 
-            // B. SQL Search
-            $conn = $this->entityManager->getConnection();
-            $rows = $conn->fetchAllAssociative("SELECT content FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 3");
+            $rows = $this->entityManager->getConnection()->fetchAllAssociative(
+                "SELECT content FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 3"
+            );
             
-            if (empty($rows)) {
-                return "No documents found.";
-            }
-
+            if (empty($rows)) return "No documents found.";
+            
             $context = implode("\n---\n", array_column($rows, 'content'));
 
-            // C. Generation
             $systemPrompt = <<<PROMPT
 You are an expert AI assistant specialized in API Platform and Symfony.
 
@@ -357,20 +280,20 @@ PROMPT;
             
             $chatResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
                 'json' => [
-                    'model' => 'mistral',
-                    'stream' => false,
+                    'model' => 'mistral', 
+                    'stream' => false, 
                     'options' => ['temperature' => 0.0],
                     'messages' => [
                         ['role' => 'system', 'content' => $systemPrompt],
                         ['role' => 'user', 'content' => $question]
                     ]
-                ],
+                ], 
                 'timeout' => self::TIMEOUT
             ]);
-
+            
             return $chatResponse->toArray()['message']['content'] ?? "Generation error";
-        } catch (\Exception $e) {
-            return "Technical error: " . $e->getMessage();
+        } catch (\Exception $e) { 
+            return "Technical error: " . $e->getMessage(); 
         }
     }
 
@@ -417,27 +340,11 @@ PROMPT;
                 ],
                 'timeout' => self::TIMEOUT
             ]);
-
-            $content = $response->toArray()['message']['content'];
             
-            // Nettoyer le JSON
-            $content = trim($content);
-            if (preg_match('/\{.*\}/s', $content, $matches)) {
-                $content = $matches[0];
-            }
-            
-            $decoded = json_decode($content, true);
-            
-            if (json_last_error() !== JSON_ERROR_NONE || !isset($decoded['score']) || !isset($decoded['reason'])) {
-                return ['score' => 0, 'reason' => 'JSON parse error'];
-            }
-
-            return [
-                'score' => max(0, min(5, (int)$decoded['score'])),
-                'reason' => substr($decoded['reason'], 0, 100)
-            ];
+            $data = json_decode($response->toArray()['message']['content'], true);
+            return ['score' => $data['score'] ?? 0, 'reason' => $data['reason'] ?? 'Error'];
         } catch (\Exception $e) {
-            return ['score' => 0, 'reason' => 'Judge error: ' . $e->getMessage()];
+            return ['score' => 0, 'reason' => 'Judge Error'];
         }
     }
 }
