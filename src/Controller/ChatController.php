@@ -44,7 +44,7 @@ class ChatController
         $vectorStr = '[' . implode(',', $vector) . ']';
 
         $conn = $this->entityManager->getConnection();
-        $results = $conn->executeQuery("SELECT content, metadata FROM vector_store ORDER BY vector <=> :vectorString LIMIT 3", ['vectorString' => $vectorStr]);
+        $results = $conn->executeQuery("SELECT content, metadata FROM vector_store_docs ORDER BY vector <=> :vectorString LIMIT 3", ['vectorString' => $vectorStr]);
 
         $context = "";
         foreach ($results->iterateAssociative() as $row) {
