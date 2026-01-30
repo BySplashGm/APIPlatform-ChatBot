@@ -25,3 +25,6 @@
 *.csv
 
 files_to_index.txt
+
+/.venv/
+/test_results/
