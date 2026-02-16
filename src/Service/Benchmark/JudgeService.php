@@ -2,14 +2,17 @@
 
 namespace App\Service\Benchmark;
 
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class JudgeService
 {
-    private const TIMEOUT = 300;
+    private const TIMEOUT = 120;
 
     public function __construct(
-        private HttpClientInterface $httpClient
+        private HttpClientInterface $httpClient,
+        #[Autowire(env: 'JUDGE_MODEL_NAME')]
+        private string $judgeModel = 'mistral'
     ) {
     }
 
@@ -48,7 +51,7 @@ PROMPT;
         try {
             $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
                 'json' => [
-                    'model' => 'mistral', 
+                    'model' => $this->judgeModel,
                     'format' => 'json',
                     'stream' => false,
                     'options' => ['temperature' => 0.0],
@@ -57,8 +60,13 @@ PROMPT;
                 'timeout' => self::TIMEOUT
             ]);
             
-            $data = json_decode($response->toArray()['message']['content'], true);
-            return ['score' => $data['score'] ?? 0, 'reason' => $data['reason'] ?? 'Error'];
+            $content = $response->toArray()['message']['content'];
+            $data = json_decode($content, true);
+
+            return [
+                'score' => isset($data['score']) ? (int)$data['score'] : 0, 
+                'reason' => $data['reason'] ?? 'Invalid JSON format'
+            ];
         } catch (\Exception $e) {
             return ['score' => 0, 'reason' => 'Judge Error: ' . $e->getMessage()];
         }

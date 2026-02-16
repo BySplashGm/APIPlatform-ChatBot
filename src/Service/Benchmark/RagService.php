@@ -3,60 +3,71 @@
 namespace App\Service\Benchmark;
 
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class RagService
 {
-    private const TIMEOUT = 300;
+    private const TIMEOUT = 60;
 
     public function __construct(
         private HttpClientInterface $httpClient,
-        private EntityManagerInterface $entityManager
+        private EntityManagerInterface $entityManager,
+        #[Autowire(env: 'RAG_MODEL_NAME')]
+        private string $modelName = 'mistral'
     ) {
     }
 
     public function askQuestion(string $question, string $source): string
     {
-        $tableName = 'vector_store_' . $source;
-        
         try {
             $vectorStr = $this->getEmbedding($question);
 
-            $rows = $this->entityManager->getConnection()->fetchAllAssociative(
-                "SELECT content FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 3"
-            );
-            
-            if (empty($rows)) {
-                return "No documents found.";
+            $context = match($source) {
+                'combined' => $this->retrieveCombinedContext($vectorStr),
+                default => $this->retrieveSingleSourceContext($source, $vectorStr)
+            };
+
+            if (empty($context)) {
+                return "I don't have enough information to answer this question.";
             }
-            
-            $context = implode("\n---\n", array_column($rows, 'content'));
 
             return $this->generateAnswer($question, $context);
-        } catch (\Exception $e) { 
-            return "Technical error: " . $e->getMessage(); 
+        } catch (\Exception $e) {
+            return "Technical error: " . $e->getMessage();
         }
     }
 
     public function getEmbedding(string $text): string
     {
-        $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-            'json' => ['model' => 'nomic-embed-text', 'input' => $text], 
-            'timeout' => self::TIMEOUT
-        ]);
-        
-        $embedding = $response->toArray()['embeddings'][0];
-        return '[' . implode(',', $embedding) . ']';
+        $vector = $this->getEmbeddingVector($text);
+        return '[' . implode(',', $vector) . ']';
     }
 
     public function getEmbeddingVector(string $text): array
     {
         $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-            'json' => ['model' => 'nomic-embed-text', 'input' => $text], 
+            'json' => ['model' => 'nomic-embed-text', 'input' => $text],
             'timeout' => 30
         ]);
-        
         return $response->toArray()['embeddings'][0];
+    }
+
+    private function retrieveSingleSourceContext(string $source, string $vectorStr): string
+    {
+        $tableName = 'vector_store_' . $source;
+        $sql = "SELECT content FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 2";
+
+        $rows = $this->entityManager->getConnection()->fetchAllAssociative($sql);
+        return implode("\n---\n", array_column($rows, 'content'));
+    }
+
+    private function retrieveCombinedContext(string $vectorStr): string
+    {
+        $docs = $this->retrieveSingleSourceContext('docs', $vectorStr);
+        $code = $this->retrieveSingleSourceContext('code', $vectorStr);
+
+        return "DOCUMENTATION:\n$docs\n\nCODE EXAMPLES:\n$code";
     }
 
     private function generateAnswer(string $question, string $context): string
@@ -75,20 +86,26 @@ STRICT RULES:
 CONTEXT:
 $context
 PROMPT;
-        
+
         $chatResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
             'json' => [
-                'model' => 'mistral', 
-                'stream' => false, 
-                'options' => ['temperature' => 0.0],
+                'model' => $this->modelName,
+                'stream' => false,
+                'options' => [
+                    'temperature' => 0.0,
+                    'num_ctx' => 4096,
+                    'num_predict' => 256,
+                    'top_k' => 20,
+                    'top_p' => 0.9,
+                ],
                 'messages' => [
                     ['role' => 'system', 'content' => $systemPrompt],
                     ['role' => 'user', 'content' => $question]
                 ]
-            ], 
+            ],
             'timeout' => self::TIMEOUT
         ]);
-        
+
         return $chatResponse->toArray()['message']['content'] ?? "Generation error";
     }
 }
