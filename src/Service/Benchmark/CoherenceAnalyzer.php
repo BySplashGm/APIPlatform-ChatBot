@@ -18,7 +18,6 @@ class CoherenceAnalyzer
      */
     public function computeCoherenceScores(array $detailedResults, SymfonyStyle $io): array
     {
-        // Group results by original question
         $grouped = [];
         foreach ($detailedResults as $idx => $result) {
             $key = $result->source . '|||' . $result->originalQuestion;
@@ -40,7 +39,6 @@ class CoherenceAnalyzer
                 continue;
             }
             
-            // Get embeddings for all responses
             $embeddings = [];
             foreach ($responses as $item) {
                 try {
@@ -50,7 +48,6 @@ class CoherenceAnalyzer
                 }
             }
             
-            // Compute cosine similarity with first response (original)
             $firstIdx = $responses[0]['idx'];
             $firstEmb = $embeddings[$firstIdx] ?? null;
             
@@ -88,7 +85,6 @@ class CoherenceAnalyzer
         $progressBar->finish();
         $io->newLine(2);
         
-        // Merge updated results with original
         foreach ($updatedResults as $idx => $result) {
             $detailedResults[$idx] = $result;
         }
