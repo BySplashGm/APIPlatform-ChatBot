@@ -4,13 +4,13 @@ namespace App\Command;
 
 use App\Service\Benchmark\CoherenceAnalyzer;
 use App\Service\Benchmark\JudgeService;
-use App\Service\Benchmark\RagService;
 use App\Service\Benchmark\ResultsManager;
 use App\Service\Benchmark\TestGenerator\BiasTestGenerator;
 use App\Service\Benchmark\TestGenerator\ContextNoiseTestGenerator;
 use App\Service\Benchmark\TestGenerator\RobustnessTestGenerator;
 use App\Service\Benchmark\TestGenerator\SecurityTestGenerator;
-use App\Service\Benchmark\VectorStoreManager;
+use App\Service\Rag\RagService;
+use App\Service\Rag\VectorStoreManager;
 use App\ValueObject\DetailedTestResult;
 use App\ValueObject\TestQuestion;
 use App\ValueObject\TestResult;
