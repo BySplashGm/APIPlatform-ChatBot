@@ -2,6 +2,7 @@
 
 namespace App\Service\Benchmark;
 
+use App\Service\Rag\RagService;
 use App\ValueObject\DetailedTestResult;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
