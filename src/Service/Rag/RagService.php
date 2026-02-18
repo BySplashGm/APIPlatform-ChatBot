@@ -10,6 +10,9 @@ class RagService
 {
     private const TIMEOUT = 60;
 
+    /** Sources autorisées — toute valeur hors liste est rejetée */
+    private const ALLOWED_SOURCES = ['docs', 'code'];
+
     public function __construct(
         private HttpClientInterface $httpClient,
         private EntityManagerInterface $entityManager,
@@ -87,6 +90,14 @@ class RagService
      */
     private function retrieveSingleSourceContext(string $source, string $vectorStr): array
     {
+        if (!in_array($source, self::ALLOWED_SOURCES, true)) {
+            throw new \InvalidArgumentException(sprintf('Source invalide : "%s".', $source));
+        }
+
+        if (!preg_match('/^\[[\d.,\s\-]+\]$/', $vectorStr)) {
+            throw new \InvalidArgumentException('Format de vecteur invalide.');
+        }
+
         $tableName = 'vector_store_' . $source;
         $sql = "SELECT content, metadata FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 5";
 
@@ -123,7 +134,6 @@ class RagService
     /**
      * Transforme un chemin de fichier en URL exploitable.
      * Pour 'docs' : URL officielle API Platform.
-     * Pour 'code' : lien GitHub api-platform/core.
      */
     private function generateSourceUrl(string $filepath, string $type): string
     {
@@ -135,7 +145,7 @@ class RagService
             return 'https://api-platform.com/docs/' . $path . '/';
         }
 
-        return 'https://github.com/api-platform/core/blob/main/tests/' . ltrim($filepath, '/');
+        return 'https://github.com/api-platform/core/blob/main/tests/Functional/' . ltrim($filepath, '/');
     }
 
     /**
