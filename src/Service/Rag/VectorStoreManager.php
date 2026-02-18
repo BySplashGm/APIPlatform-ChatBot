@@ -1,13 +1,14 @@
 <?php
 
-namespace App\Service\Benchmark;
+namespace App\Service\Rag;
 
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Helper\ProgressBar;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
-use Symfony\Component\Process\Process;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\Process\Process;
 
 class VectorStoreManager
 {
@@ -23,14 +24,14 @@ class VectorStoreManager
     public function prepareVectorStores(SymfonyStyle $io, OutputInterface $output): void
     {
         $conn = $this->entityManager->getConnection();
-        
+
         $io->text("Clearing vector stores...");
         $conn->executeStatement("TRUNCATE TABLE vector_store_docs");
         $conn->executeStatement("TRUNCATE TABLE vector_store_code");
 
         $pathsToIndex = [
-            'docs/', 
-            'core/tests/Functional/' 
+            'docs/',
+            'core/tests/Functional/',
         ];
 
         $fixturesPath = $this->projectDir . '/' . self::FIXTURES_FILE;
@@ -48,34 +49,34 @@ class VectorStoreManager
         $progressBar->start();
 
         foreach ($pathsToIndex as $path) {
-            $fullPath = (str_starts_with($path, '/') || str_contains($path, ':')) 
-                ? $path 
+            $fullPath = (str_starts_with($path, '/') || str_contains($path, ':'))
+                ? $path
                 : $this->projectDir . '/' . $path;
 
             if (!file_exists($fullPath)) {
                 $progressBar->advance();
                 continue;
             }
-            
+
             $progressBar->setMessage("Indexing " . basename($path));
 
             $process = new Process([
-                'php', 'bin/console', 'app:ingest', $fullPath, '--force'
+                'php', 'bin/console', 'app:ingest', $fullPath, '--force',
             ]);
-            
+
             $process->setTimeout(600);
             $process->run();
-            
+
             if (!$process->isSuccessful()) {
                 $io->error("Error indexing $path: " . $process->getErrorOutput());
             }
-            
+
             $progressBar->advance();
         }
-        
+
         $progressBar->finish();
         $io->newLine(2);
-        
+
         $this->checkExistingData($output);
     }
 
@@ -84,23 +85,25 @@ class VectorStoreManager
         $conn = $this->entityManager->getConnection();
         $tableData = [];
         $allReady = true;
-        
+
         $docsCount = $conn->fetchOne("SELECT COUNT(*) FROM vector_store_docs");
         $codeCount = $conn->fetchOne("SELECT COUNT(*) FROM vector_store_code");
-        
+
         $tableData[] = ['vector_store_docs', $docsCount, $docsCount > 0 ? 'OK' : 'EMPTY'];
         $tableData[] = ['vector_store_code', $codeCount, $codeCount > 0 ? 'OK' : 'EMPTY'];
-        
+
         $combinedCount = $docsCount + $codeCount;
         $tableData[] = ['(virtual) combined', $combinedCount, $combinedCount > 0 ? 'OK' : 'EMPTY'];
 
         if ($docsCount == 0 && $codeCount == 0) {
             $allReady = false;
         }
-        
-        $table = new \Symfony\Component\Console\Helper\Table($output);
-        $table->setHeaders(['Table', 'Chunks', 'Status'])->setRows($tableData)->render();
-        
+
+        (new Table($output))
+            ->setHeaders(['Table', 'Chunks', 'Status'])
+            ->setRows($tableData)
+            ->render();
+
         if (!$allReady) {
             throw new \RuntimeException("Vector stores are empty. Run with --reindex first.");
         }
