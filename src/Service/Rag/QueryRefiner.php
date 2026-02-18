@@ -7,8 +7,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class QueryRefiner
 {
-    // On garde un timeout très court, ça doit être instantané
-    private const TIMEOUT = 5;
+    private const TIMEOUT = 15;
 
     public function __construct(
         private HttpClientInterface $httpClient,
@@ -22,24 +21,22 @@ class QueryRefiner
     public function refine(string $userQuery): string
     {
         $prompt = <<<PROMPT
-You are a smart search optimizer for API Platform.
-Convert the user question into a search query optimized for a vector database.
+Task: Extract technical keywords from the user query for a search engine.
+Target: API Platform / Symfony documentation (English).
 
-RULES:
-1. Keep technical keywords (e.g., "StateProvider", "SearchFilter").
-2. IMPORTANT: KEEP ACTION VERBS if the user wants to generate code (e.g., "create", "write", "generate", "example").
-3. Remove conversational noise (e.g., "Hello", "Can you tell me", "please").
-4. Do NOT output JSON. Just the text.
+INSTRUCTIONS:
+1. Translate the intent into ENGLISH technical terms.
+2. Keep specific class names as is (e.g. "StateProvider", "User").
+3. Output ONLY the keywords separated by spaces.
 
-Example 1:
-User: "Can you explain how the security works?"
-Output: security mechanism explanation
+Examples:
+Input: "Comment créer un stateprovider ?"
+Output: create implement custom StateProvider interface
 
-Example 2:
-User: "Write a custom DataPersister for User entity"
-Output: write custom DataPersister User entity code example
+Input: "C'est quoi un data persister ?"
+Output: DataPersister definition usage explanation
 
-User: "$userQuery"
+Input: "$userQuery"
 Output:
 PROMPT;
 
