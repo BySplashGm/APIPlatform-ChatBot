@@ -54,7 +54,7 @@ class IngestDocsCommand extends Command
         if (is_file($path)) {
             $finder->append([$path]);
         } else {
-            $finder->in($path)->files()->name(['*.php', '*.md', '*.mdx'])->notPath(['vendor', 'var', 'node_modules', '.git']);
+            $finder->in($path)->files()->ignoreDotFiles(false)->name(['*.php', '*.md', '*.mdx'])->notPath(['vendor', 'var', 'node_modules', '.git']);
         }
         
         if (is_dir($path)) {
