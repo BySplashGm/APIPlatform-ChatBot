@@ -21,20 +21,13 @@ class QueryRefiner
     public function refine(string $userQuery): string
     {
         $prompt = <<<PROMPT
-Task: Extract technical keywords from the user query for a search engine.
-Target: API Platform / Symfony documentation (English).
+Role: Technical Keyword Extractor.
+Task: Add English search modifiers to the user's query.
 
-INSTRUCTIONS:
-1. Translate the intent into ENGLISH technical terms.
-2. Keep specific class names as is (e.g. "StateProvider", "User").
-3. Output ONLY the keywords separated by spaces.
-
-Examples:
-Input: "Comment créer un stateprovider ?"
-Output: create implement custom StateProvider interface
-
-Input: "C'est quoi un data persister ?"
-Output: DataPersister definition usage explanation
+CRITICAL RULES:
+1. NEVER delete or modify technical terms from the input (even if they look misspelled like "stateprovider" or "apiresource").
+2. Add English action keywords (e.g., "create example php code implementation" or "documentation explanation").
+3. Output ONLY the English keywords. Do not repeat the user's original query.
 
 Input: "$userQuery"
 Output:
@@ -48,7 +41,7 @@ PROMPT;
                     'stream' => false,
                     'options' => [
                         'temperature' => 0.0,
-                        'num_predict' => 64,
+                        'num_predict' => 30,
                     ],
                 ],
                 'timeout' => self::TIMEOUT,
