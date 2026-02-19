@@ -8,31 +8,50 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 class RagService
 {
-    private const TIMEOUT = 60;
+    private const TIMEOUT = 120;
 
-    /** Sources autorisées — toute valeur hors liste est rejetée */
     private const ALLOWED_SOURCES = ['docs', 'code'];
+
+    private const OLLAMA_URL = 'http://127.0.0.1:11434';
 
     public function __construct(
         private HttpClientInterface $httpClient,
         private EntityManagerInterface $entityManager,
         private QueryRefiner $queryRefiner,
         #[Autowire(env: 'RAG_MODEL_NAME')]
-        private string $modelName = 'mistral'
+        private string $modelName
     ) {
+    }
+
+    /**
+     * Prépare le contexte RAG (refinement, embedding, retrieval)
+     * @return array{context: string, sources: array, keywords: string}
+     */
+    public function prepareRagContext(string $question, string $source): array
+    {
+        $searchKeywords = $this->queryRefiner->refine($question);
+
+        if (empty(trim($searchKeywords))) {
+            $searchKeywords = $question;
+        }
+
+        // DEBUG — à supprimer
+        file_put_contents(__DIR__.'/../../../var/log/debug_rag_search_keywords.txt', $searchKeywords);
+
+        $vectorStr = $this->getEmbedding($searchKeywords);
+
+        ['context' => $context, 'sources' => $sources] = $this->retrieveContext($source, $vectorStr);
+
+        return ['context' => $context, 'sources' => $sources, 'keywords' => $searchKeywords];
     }
 
     public function askQuestion(string $question, string $source): string
     {
         try {
-            $searchKeywords = $this->queryRefiner->refine($question);
-
-            $vectorStr = $this->getEmbedding($searchKeywords);
-
-            ['context' => $context, 'sources' => $sources] = $this->retrieveContext($source, $vectorStr);
+            ['context' => $context, 'sources' => $sources] = $this->prepareRagContext($question, $source);
 
             if (empty($context)) {
-                return "I don't have enough information.";
+                return "I don't have enough information in the documentation to answer this question.";
             }
 
             $answer = $this->generateAnswer($question, $context);
@@ -54,18 +73,24 @@ class RagService
 
     public function getEmbeddingVector(string $text): array
     {
+        if (empty(trim($text))) {
+            throw new \InvalidArgumentException("Impossible de générer un vecteur : le texte est vide.");
+        }
+
         $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
             'json' => ['model' => 'nomic-embed-text', 'input' => $text],
             'timeout' => 30,
         ]);
-        return $response->toArray()['embeddings'][0];
+        
+        $data = $response->toArray();
+
+        if (!isset($data['embeddings'][0])) {
+             throw new \RuntimeException("Ollama API Error: No embeddings returned.");
+        }
+
+        return $data['embeddings'][0];
     }
 
-    /**
-     * Point d'entrée public pour récupérer contexte + sources selon la source choisie.
-     *
-     * @return array{context: string, sources: array<string, string>}
-     */
     public function retrieveContext(string $source, string $vectorStr): array
     {
         return match ($source) {
@@ -74,31 +99,14 @@ class RagService
         };
     }
 
-    /**
-     * Formate le tableau [filepath => url] en section Markdown lisible.
-     *
-     * @param array<string, string> $sources
-     */
-    public function formatSources(array $sources): string
-    {
-        return $this->formatSourcesSection($sources);
-    }
-
-    /**
-     * @return array{context: string, sources: array<string, string>}
-     *   'sources' est un tableau dédupliqué [filepath => url]
-     */
     private function retrieveSingleSourceContext(string $source, string $vectorStr): array
     {
         if (!in_array($source, self::ALLOWED_SOURCES, true)) {
             throw new \InvalidArgumentException(sprintf('Source invalide : "%s".', $source));
         }
 
-        if (!preg_match('/^\[[\d.,\s\-]+\]$/', $vectorStr)) {
-            throw new \InvalidArgumentException('Format de vecteur invalide.');
-        }
-
         $tableName = 'vector_store_' . $source;
+        
         $sql = "SELECT content, metadata FROM $tableName ORDER BY vector <=> '$vectorStr' LIMIT 5";
 
         $rows = $this->entityManager->getConnection()->fetchAllAssociative($sql);
@@ -117,9 +125,6 @@ class RagService
         return ['context' => $context, 'sources' => $sources];
     }
 
-    /**
-     * @return array{context: string, sources: array<string, string>}
-     */
     private function retrieveCombinedContext(string $vectorStr): array
     {
         ['context' => $docsContext, 'sources' => $docsSources] = $this->retrieveSingleSourceContext('docs', $vectorStr);
@@ -131,31 +136,29 @@ class RagService
         return ['context' => $context, 'sources' => $sources];
     }
 
-    /**
-     * Transforme un chemin de fichier en URL exploitable.
-     * Pour 'docs' : URL officielle API Platform.
-     */
     private function generateSourceUrl(string $filepath, string $type): string
     {
         if ($type === 'docs') {
             $path = preg_replace('#^(docs/|pages/)#', '', $filepath);
             $path = preg_replace('#\.(mdx?|html?)$#', '', $path);
             $path = trim($path, '/');
-
             return 'https://api-platform.com/docs/' . $path . '/';
         }
-
         return 'https://github.com/api-platform/core/blob/main/tests/Functional/' . ltrim($filepath, '/');
     }
 
-    /**
-     * @param array<string, string> $sources
-     */
+    public function formatSources(array $sources): string
+    {
+        return $this->formatSourcesSection($sources);
+    }
+
     private function formatSourcesSection(array $sources): string
     {
         if (empty($sources)) {
             return '';
         }
+        
+        $sources = array_unique($sources);
 
         $lines = ['**Sources :**'];
         foreach ($sources as $filepath => $url) {
@@ -166,31 +169,47 @@ class RagService
         return implode("\n", $lines);
     }
 
-    private function generateAnswer(string $question, string $context): string
+    public function buildSystemPrompt(string $question, string $context): string
     {
+        if (strlen($context) > 16000) {
+            $context = substr($context, 0, 16000) . "\n... [TRUNCATED]";
+        }
+
+        // DEBUG - à supprimer
+        file_put_contents(__DIR__.'/../../../var/log/debug_rag_context.txt', $context);
+
         $systemPrompt = <<<PROMPT
 You are an expert AI assistant specialized in API Platform and Symfony.
 
 STRICT RULES:
-1. Answer ONLY based on the provided context below
-2. If the context doesn't contain the answer, respond: "I don't have enough information in the documentation to answer this question."
-3. Do NOT invent or hallucinate information
-4. Provide code examples when available in the context
-5. Be concise and technical
-6. If asked about topics unrelated to API Platform/Symfony, politely decline
+1. Answer ONLY based on the provided context below.
+2. If the context doesn't contain the answer, respond: "I don't have enough information in the documentation provided to answer this."
+3. Do NOT invent or hallucinate information.
+4. Provide code examples when available in the context.
+5. Be concise and technical.
+6. Do NOT answer off-topic questions (weather, cooking, history, etc.).
+
+Question: $question
 
 CONTEXT:
 $context
 PROMPT;
 
-        $chatResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
+        return $systemPrompt;
+    }
+
+    private function generateAnswer(string $question, string $context): string
+    {
+        $systemPrompt = $this->buildSystemPrompt($question, $context);
+
+        $chatResponse = $this->httpClient->request('POST', self::OLLAMA_URL . '/api/chat', [
             'json' => [
                 'model' => $this->modelName,
                 'stream' => false,
                 'options' => [
                     'temperature' => 0.0,
                     'num_ctx' => 4096,
-                    'num_predict' => 256,
+                    'num_predict' => 512,
                     'top_k' => 20,
                     'top_p' => 0.9,
                 ],
