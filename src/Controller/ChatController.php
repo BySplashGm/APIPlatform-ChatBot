@@ -2,7 +2,6 @@
 
 namespace App\Controller;
 
-use App\Service\Rag\QueryRefiner;
 use App\Service\Rag\RagService;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\Request;
@@ -18,7 +17,6 @@ class ChatController
     public function __construct(
         private HttpClientInterface $httpClient,
         private RagService $ragService,
-        private QueryRefiner $queryRefiner,
         #[Autowire(env: 'OLLAMA_URL')]
         private string $ollamaUrl,
         #[Autowire(env: 'RAG_MODEL_NAME')]
@@ -35,37 +33,15 @@ class ChatController
         $data = $request->toArray();
         $userMessage = end($data['messages'])['content'] ?? '';
 
-        // 1. Raffiner la requête pour la recherche vectorielle
-        $searchKeywords = $this->queryRefiner->refine($userMessage);
-
-        // 2. Récupérer le vecteur et le contexte + sources via RagService
         try {
-            $vectorStr = $this->ragService->getEmbedding($searchKeywords);
+            ['context' => $context, 'sources' => $sources] = $this->ragService->prepareRagContext($userMessage, $this->chatSource);
         } catch (\Exception $e) {
-            return new StreamedResponse(function () {
-                echo "Erreur lors de la vectorisation.";
+            return new StreamedResponse(function () use ($e) {
+                echo "Erreur: " . $e->getMessage();
             }, 500);
         }
 
-        // Accès aux méthodes internes via reflection ou appel direct — on passe
-        // par askQuestion mais en mode streaming on reconstruit le pipeline pour
-        // pouvoir streamer les tokens ET ajouter les sources en fin de flux.
-        ['context' => $context, 'sources' => $sources] = $this->ragService->retrieveContext($this->chatSource, $vectorStr);
-
-        $systemPrompt = <<<PROMPT
-Tu es un assistant technique strict dédié à la documentation API Platform.
-Ton rôle est de répondre aux questions des développeurs en utilisant UNIQUEMENT le contexte fourni ci-dessous.
-
-RÈGLES ABSOLUES :
-1. Utilise SEULEMENT les informations présentes dans le CONTEXTE ci-dessous.
-2. Si la réponse n'est pas dans le contexte, dis : "Désolé, je ne trouve pas cette information dans la documentation fournie."
-3. N'invente JAMAIS de code ou d'explications qui ne sont pas dans le texte source.
-4. Ne réponds pas aux questions générales (météo, cuisine, histoire, etc.).
-5. Sois concis et technique.
-
-CONTEXTE :
-$context
-PROMPT;
+        $systemPrompt = $this->ragService->buildSystemPrompt($userMessage, $context);
 
         $ollamaResponse = $this->httpClient->request('POST', $this->ollamaUrl . '/api/chat', [
             'buffer' => false,
@@ -75,6 +51,9 @@ PROMPT;
                 'options' => [
                     'temperature' => 0.0,
                     'num_ctx' => 4096,
+                    'num_predict' => 512,
+                    'top_k' => 20,
+                    'top_p' => 0.9,
                 ],
                 'messages' => [
                     ['role' => 'system', 'content' => $systemPrompt],
@@ -129,7 +108,6 @@ PROMPT;
                         }
 
                         if (isset($json['done']) && $json['done'] === true) {
-                            // Ajouter la section sources en fin de stream
                             if ($sourcesSection !== '') {
                                 echo "\n\n---\n" . $sourcesSection;
                                 flush();
