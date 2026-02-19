@@ -18,7 +18,6 @@
 /assets/vendor/
 ###< symfony/asset-mapper ###
 
-/.claude/
 /.agents/
 
 /docs/
