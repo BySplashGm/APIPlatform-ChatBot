@@ -32,6 +32,7 @@ class VectorStoreManager
         $pathsToIndex = [
             'docs/',
             'core/tests/Functional/',
+            '.claude/'
         ];
 
         $fixturesPath = $this->projectDir . '/' . self::FIXTURES_FILE;
