@@ -57,7 +57,6 @@ class IngestDocsCommand extends Command
             $finder->in($path)->files()->name(['*.php', '*.md', '*.mdx'])->notPath(['vendor', 'var', 'node_modules', '.git']);
         }
         
-        // On n'affiche le message que s'il y a beaucoup de fichiers
         if (is_dir($path)) {
             $output->writeln("Found " . $finder->count() . " files. Starting ingestion...");
         }
@@ -68,7 +67,6 @@ class IngestDocsCommand extends Command
             foreach ($finder as $file) {
                 $content = file_get_contents($file->getRealPath());
                 
-                // CORRECTION ICI : Gestion du nom de fichier selon le type d'objet
                 if ($file instanceof \Symfony\Component\Finder\SplFileInfo) {
                     $filename = $file->getRelativePathname();
                 } else {
@@ -114,7 +112,6 @@ class IngestDocsCommand extends Command
             }
 
             $conn->commit();
-            // $output->writeln("Ingestion Complete.");
 
         } catch (\Exception $e) {
             $conn->rollBack();
