@@ -51,6 +51,7 @@ class RagService
 
     public function askQuestion(string $question, string $source): string
     {
+
         try {
             ['context' => $context, 'sources' => $sources] = $this->prepareRagContext($question, $source);
 
