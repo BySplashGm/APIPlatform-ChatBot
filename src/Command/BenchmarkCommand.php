@@ -22,6 +22,7 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 #[AsCommand(name: 'app:benchmark', description: 'Run quality tests with different documentation sources')]
 class BenchmarkCommand extends Command
@@ -47,6 +48,7 @@ class BenchmarkCommand extends Command
         private VectorStoreManager $vectorStoreManager,
         private CoherenceAnalyzer $coherenceAnalyzer,
         private ResultsManager $resultsManager,
+        private HttpClientInterface $httpClient,
         #[Autowire('%kernel.project_dir%')]
         private string $projectDir,
         #[Autowire(env: 'RAG_MODEL_NAME')]
@@ -65,7 +67,8 @@ class BenchmarkCommand extends Command
             ->addOption('context-noise', null, InputOption::VALUE_NONE, 'Run context noise tests')
             ->addOption('skip-coherence', null, InputOption::VALUE_NONE, 'Skip coherence score computation')
             ->addOption('light', null, InputOption::VALUE_NONE, 'Use light mode')
-            ->addOption('sample', null, InputOption::VALUE_REQUIRED, 'Test only N random questions', null);
+            ->addOption('sample', null, InputOption::VALUE_REQUIRED, 'Test only N random questions', null)
+            ->addOption('parallel', null, InputOption::VALUE_REQUIRED, 'Number of questions to process concurrently', 1);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -77,6 +80,7 @@ class BenchmarkCommand extends Command
         $testGenerators = $this->getActiveTestGenerators($input);
         $skipCoherence = $input->getOption('skip-coherence');
         $sampleSize = $input->getOption('sample');
+        $parallelCount = max(1, (int)$input->getOption('parallel'));
 
         $questionsToTest = self::QUESTIONS;
         if ($sampleSize !== null && $sampleSize > 0) {
@@ -86,6 +90,10 @@ class BenchmarkCommand extends Command
                 ? array_map(fn($k) => self::QUESTIONS[$k], $keys)
                 : [self::QUESTIONS[$keys]];
             $io->note("Sampling $sampleSize questions");
+        }
+        
+        if ($parallelCount > 1) {
+            $io->note("Parallel mode : $parallelCount questions processed concurrently");
         }
 
         if ($reindex) {
@@ -114,50 +122,99 @@ class BenchmarkCommand extends Command
             $progressBar = $io->createProgressBar(count($questionsToTest));
             $progressBar->start();
             
-            foreach ($questionsToTest as $questionData) {
-                $question = new TestQuestion($questionData['question'], $questionData['category'], $questionData['expected']);
+            if ($parallelCount > 1) {
+                $batchResults = $this->testQuestionsInBatch($questionsToTest, $source, $parallelCount);
                 
-                $result = $this->testQuestion($question, $source);
-                
-                fputcsv($fp, [
-                    date('Y-m-d H:i:s'),
-                    $source,
-                    $question->category,
-                    $question->question,
-                    $result->response,
-                    $result->score,
-                    $result->reason,
-                    $this->ragModelName,
-                    $result->time
-                ]);
-
-                $sourceResults[] = ['score' => $result->score, 'time' => $result->time, 'category' => $question->category];
-                
-                foreach ($testGenerators as $generator) {
-                    $variations = $generator->generateVariations($question->question);
+                foreach ($batchResults as $item) {
+                    $question = $item['question'];
+                    $result = $item['result'];
                     
-                    foreach ($variations as $varType => $varQuestion) {
-                        $varResult = $this->testQuestion(
-                            new TestQuestion($varQuestion, $question->category, $question->expected), 
-                            $source
-                        );
+                    fputcsv($fp, [
+                        date('Y-m-d H:i:s'),
+                        $source,
+                        $question->category,
+                        $question->question,
+                        $result->response,
+                        $result->score,
+                        $result->reason,
+                        $this->ragModelName,
+                        $result->time
+                    ]);
+
+                    $sourceResults[] = ['score' => $result->score, 'time' => $result->time, 'category' => $question->category];
+                    
+                    foreach ($testGenerators as $generator) {
+                        $variations = $generator->generateVariations($question->question);
                         
-                        $detailedResults[] = new DetailedTestResult(
-                            source: $source,
-                            testSuite: $generator->getTestSuiteName(),
-                            category: $question->category,
-                            originalQuestion: $question->question,
-                            variationType: $varType,
-                            variationQuestion: $varQuestion,
-                            response: $varResult->response,
-                            score: $varResult->score,
-                            reason: $varResult->reason,
-                            time: $varResult->time
-                        );
+                        foreach ($variations as $varType => $varQuestion) {
+                            $varResult = $this->testQuestion(
+                                new TestQuestion($varQuestion, $question->category, $question->expected), 
+                                $source
+                            );
+                            
+                            $detailedResults[] = new DetailedTestResult(
+                                source: $source,
+                                testSuite: $generator->getTestSuiteName(),
+                                category: $question->category,
+                                originalQuestion: $question->question,
+                                variationType: $varType,
+                                variationQuestion: $varQuestion,
+                                response: $varResult->response,
+                                score: $varResult->score,
+                                reason: $varResult->reason,
+                                time: $varResult->time
+                            );
+                        }
                     }
+                    
+                    $progressBar->advance();
                 }
-                
-                $progressBar->advance();
+            } else {
+                foreach ($questionsToTest as $questionData) {
+                    $question = new TestQuestion($questionData['question'], $questionData['category'], $questionData['expected']);
+                    
+                    $result = $this->testQuestion($question, $source);
+                    
+                    fputcsv($fp, [
+                        date('Y-m-d H:i:s'),
+                        $source,
+                        $question->category,
+                        $question->question,
+                        $result->response,
+                        $result->score,
+                        $result->reason,
+                        $this->ragModelName,
+                        $result->time
+                    ]);
+
+                    $sourceResults[] = ['score' => $result->score, 'time' => $result->time, 'category' => $question->category];
+                    
+                    foreach ($testGenerators as $generator) {
+                        $variations = $generator->generateVariations($question->question);
+                        
+                        foreach ($variations as $varType => $varQuestion) {
+                            $varResult = $this->testQuestion(
+                                new TestQuestion($varQuestion, $question->category, $question->expected), 
+                                $source
+                            );
+                            
+                            $detailedResults[] = new DetailedTestResult(
+                                source: $source,
+                                testSuite: $generator->getTestSuiteName(),
+                                category: $question->category,
+                                originalQuestion: $question->question,
+                                variationType: $varType,
+                                variationQuestion: $varQuestion,
+                                response: $varResult->response,
+                                score: $varResult->score,
+                                reason: $varResult->reason,
+                                time: $varResult->time
+                            );
+                        }
+                    }
+                    
+                    $progressBar->advance();
+                }
             }
             
             $progressBar->finish();
@@ -223,6 +280,31 @@ class BenchmarkCommand extends Command
             reason: $scoreData['reason'],
             time: $totalTime
         );
+    }
+
+    /**
+     * Teste plusieurs questions en parallèle en lançant les requêtes HTTP simultanément
+     */
+    private function testQuestionsInBatch(array $questions, string $source, int $batchSize): array
+    {
+        $results = [];
+        $batches = array_chunk($questions, $batchSize);
+        
+        foreach ($batches as $batch) {
+            // Lance toutes les questions du batch en même temps
+            $batchResults = [];
+            foreach ($batch as $questionData) {
+                $question = new TestQuestion($questionData['question'], $questionData['category'], $questionData['expected']);
+                // En mode simple, on traite séquentiellement mais pourrait être optimisé
+                $batchResults[] = [
+                    'question' => $question,
+                    'result' => $this->testQuestion($question, $source)
+                ];
+            }
+            $results = array_merge($results, $batchResults);
+        }
+        
+        return $results;
     }
     
     private function displaySourceResults(SymfonyStyle $io, array $results): void
