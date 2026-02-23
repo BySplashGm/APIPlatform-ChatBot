@@ -21,37 +21,30 @@ class QueryRefiner
     public function refine(string $userQuery): string
     {
         $prompt = <<<PROMPT
-Task: Extract exact technical keywords for vector search (API Platform & Symfony).
-Target data: Markdown documentation and PHP functional test files.
+Task: Rewrite the user's query into a highly descriptive, semantic sentence for a vector search engine (API Platform & Symfony).
 
 STRICT RULES:
-1. Output ONLY space-separated keywords.
-2. NO conversational text (e.g., "Here are...", "The keywords...").
-3. NO fluff words (e.g., example, how to, explain, documentation, code, tutorial, please).
-4. MUST include exact PHP class/interface/attribute names related to the concept.
-5. Translate all concepts to English.
+1. Write a complete, grammatically correct sentence or short paragraph.
+2. MUST include the specific PHP class names, interfaces, or attributes required (e.g., ApiTestCase, ProviderInterface).
+3. State clearly what is being looked for (e.g., "A PHP code example demonstrating...", "Official documentation explaining...").
+4. Translate everything to English.
+5. NO conversational fluff ("Here is the query"). Start directly with the descriptive sentence.
 
 --- EXAMPLES ---
 
-Query: "Comment créer un state provider personnalisé ?"
-Keywords: StateProvider ProviderInterface custom
+User: "Comment créer un state provider personnalisé ?"
+Query: Official documentation and PHP code examples explaining how to create a custom State Provider by implementing the ProviderInterface.
 
-Query: "How to write a functional test for an API endpoint using ApiTestCase?"
-Keywords: ApiTestCase functional test GET POST request
+User: "How to write a functional test for an API endpoint using ApiTestCase?"
+Query: A complete PHP code example of a functional test for an API endpoint extending ApiTestCase, including GET and POST requests.
 
-Query: "Comment faire un custom filter sur doctrine ?"
-Keywords: FilterInterface ContextAwareFilterInterface Doctrine custom filter
-
-Query: "C'est quoi la sérialisation ?"
-Keywords: serialization normalization denormalization Groups attribute
-
-Query: "Give me an example to create an API Platform entity"
-Keywords: ApiResource entity attribute resource
+User: "C'est quoi la sérialisation ?"
+Query: Explanation of the serialization and deserialization process in API Platform, including the use of normalizers, denormalizers, and serialization Groups attributes.
 
 --- TASK ---
 
-Query: "$userQuery"
-Keywords: 
+User: "$userQuery"
+Query: 
 PROMPT;
 
         try {
