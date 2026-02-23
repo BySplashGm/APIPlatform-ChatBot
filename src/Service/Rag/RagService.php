@@ -146,29 +146,29 @@ class RagService
 
     private function retrieveCombinedContext(string $vectorStr): array
     {
-        $sql = <<<SQL
-        SELECT content, metadata, source_type
-        FROM (
-            SELECT content, metadata, 'docs' as source_type, vector <=> ? as distance
-            FROM vector_store_docs
-            UNION ALL
-            SELECT content, metadata, 'code' as source_type, vector <=> ? as distance
-            FROM vector_store_code
-        ) AS combined_sources
-        ORDER BY distance
-        LIMIT 5
-        SQL;
+        $sqlDocs = "SELECT content, metadata, 'docs' as source_type, vector <=> ? as distance FROM vector_store_docs ORDER BY vector <=> ? LIMIT 3";
+        $sqlCode = "SELECT content, metadata, 'code' as source_type, vector <=> ? as distance FROM vector_store_code ORDER BY vector <=> ? LIMIT 3";
 
-        $rows = $this->entityManager->getConnection()->fetchAllAssociative($sql, [$vectorStr, $vectorStr]);
+        $docsRows = $this->entityManager->getConnection()->fetchAllAssociative($sqlDocs, [$vectorStr, $vectorStr]);
+        $codeRows = $this->entityManager->getConnection()->fetchAllAssociative($sqlCode, [$vectorStr, $vectorStr]);
 
-        $context = implode("\n\n--- DOCUMENT FRAGMENT ---\n\n", array_column($rows, 'content'));
+        $allRows = array_merge($docsRows, $codeRows);
+        usort($allRows, fn($a, $b) => $a['distance'] <=> $b['distance']);
+
+        $fragments = [];
+        foreach ($allRows as $row) {
+            $prefix = $row['source_type'] === 'docs' ? '--- Source: Docs ---' : '--- Source: Code ---';
+            $fragments[] = "$prefix\n" . $row['content'];
+        }
+
+        $context = implode("\n\n--- DOCUMENT FRAGMENT ---\n\n", $fragments);
 
         $sources = [];
-        foreach ($rows as $row) {
+        foreach ($allRows as $row) {
             $meta = json_decode($row['metadata'] ?? '{}', true);
             $filename = $meta['filename'] ?? null;
             $sourceType = $row['source_type'];
-            
+
             if ($filename !== null && !isset($sources[$filename])) {
                 $sources[$filename] = $this->generateSourceUrl($filename, $sourceType);
             }
@@ -248,8 +248,8 @@ class RagService
 
     public function buildSystemPrompt(string $question, string $context): string
     {
-        if (strlen($context) > 16000) {
-            $context = substr($context, 0, 16000) . "\n... [TRUNCATED]";
+        if (strlen($context) > 40000) {
+            $context = substr($context, 0, 40000) . "\n... [TRUNCATED]";
         }
 
         // DEBUG - à supprimer
@@ -283,7 +283,7 @@ PROMPT;
     {
         $sanitized = preg_replace('/\x00-\x1F\x7F/u', '', $input);
         
-        $sanitized = mb_substr($sanitized, 0, 10000);
+        $sanitized = mb_substr($sanitized, 0, 35000);
         
         return $sanitized;
     }
@@ -298,8 +298,8 @@ PROMPT;
                 'stream' => false,
                 'options' => [
                     'temperature' => 0.0,
-                    'num_ctx' => 4096,
-                    'num_predict' => 512,
+                    'num_ctx' => 8192,
+                    'num_predict' => 2048,
                     'top_k' => 20,
                     'top_p' => 0.9,
                 ],
