@@ -30,16 +30,67 @@ class BenchmarkCommand extends Command
     private const CSV_FILE = 'benchmark_results.csv';
 
     private const QUESTIONS = [
-        ['question' => "What is a State Provider?", 'category' => 'basic', 'expected' => 'Should explain State Provider concept'],
-        ['question' => "How does API Platform handle serialization?", 'category' => 'basic', 'expected' => 'Should explain serialization mechanism'],
-        ['question' => "Give me a code example to create an API Platform entity.", 'category' => 'code', 'expected' => 'Should provide PHP code example with ApiResource'],
-        ['question' => "How to implement a custom data provider?", 'category' => 'code', 'expected' => 'Should provide implementation code'],
-        ['question' => "How to create a Custom Filter?", 'category' => 'advanced', 'expected' => 'Should provide filter implementation'],
-        ['question' => "How to handle validation errors (422)?", 'category' => 'advanced', 'expected' => 'Should explain 422 error handling'],
-        ['question' => "How to secure API endpoints?", 'category' => 'security', 'expected' => 'Should explain endpoint security'],
-        ['question' => "How to write functional tests for API Platform?", 'category' => 'testing', 'expected' => 'Should explain functional testing'],
-        ['question' => "What is the capital of Switzerland?", 'category' => 'trap', 'expected' => 'Should decline to answer or say it lacks information'],
-        ['question' => "How to cook a pizza?", 'category' => 'trap', 'expected' => 'Should decline to answer'],
+        // --- BASIC ---
+        [
+            'question' => "What is the exact role of a StateProvider in API Platform v3?", 
+            'category' => 'basic', 
+            'expected' => 'Should explain that a StateProvider is responsible for retrieving data and mention ProviderInterface.'
+        ],
+        [
+            'question' => "How does API Platform use serialization groups to filter properties?", 
+            'category' => 'basic', 
+            'expected' => 'Should explain normalization/denormalization contexts and the #[Groups] attribute.'
+        ],
+        
+        // --- CODE ---
+        [
+            'question' => "Show me a PHP code example to expose a standard PHP class as a resource using the #[ApiResource] attribute.", 
+            'category' => 'code', 
+            'expected' => 'Must provide valid PHP code with a class annotated or attributed with #[ApiResource].'
+        ],
+        [
+            'question' => "Write a complete PHP example of a custom StateProvider implementing ProviderInterface.", 
+            'category' => 'code', 
+            'expected' => 'Must provide a PHP class implementing ApiPlatform\State\ProviderInterface with the provide() method.'
+        ],
+        
+        // --- ADVANCED ---
+        [
+            'question' => "How to create a Custom Doctrine ORM Filter in API Platform?", 
+            'category' => 'advanced', 
+            'expected' => 'Should mention extending AbstractContextAwareFilter or implementing FilterInterface, and the getDescription() method.'
+        ],
+        [
+            'question' => "How to handle Symfony validation errors and return a 422 Unprocessable Entity?", 
+            'category' => 'advanced', 
+            'expected' => 'Should explain the use of Symfony Constraints (#[Assert]) and how API Platform automatically converts them to 422 JSON/JSON-LD responses.'
+        ],
+        
+        // --- SECURITY ---
+        [
+            'question' => "How to restrict access to a specific GET operation using the security attribute and Symfony Roles?", 
+            'category' => 'security', 
+            'expected' => 'Should show an example using security: "is_granted(\'ROLE_USER\')" inside an ApiResource or Get operation.'
+        ],
+        
+        // --- TESTING ---
+        [
+            'question' => "How to write a functional test for an API endpoint using ApiTestCase?", 
+            'category' => 'testing', 
+            'expected' => 'Should provide a PHP code example extending ApiPlatform\Symfony\Bundle\Test\ApiTestCase and using static::createClient()->request().'
+        ],
+        
+        // --- TRAPS ---
+        [
+            'question' => "What is the capital of Switzerland?", 
+            'category' => 'trap', 
+            'expected' => 'Must strictly decline to answer because it is unrelated to API Platform/Symfony.'
+        ],
+        [
+            'question' => "How to cook a pizza?", 
+            'category' => 'trap', 
+            'expected' => 'Must strictly decline to answer because it is unrelated to API Platform/Symfony.'
+        ],
     ];
 
     public function __construct(
@@ -68,7 +119,8 @@ class BenchmarkCommand extends Command
             ->addOption('skip-coherence', null, InputOption::VALUE_NONE, 'Skip coherence score computation')
             ->addOption('light', null, InputOption::VALUE_NONE, 'Use light mode')
             ->addOption('sample', null, InputOption::VALUE_REQUIRED, 'Test only N random questions', null)
-            ->addOption('parallel', null, InputOption::VALUE_REQUIRED, 'Number of questions to process concurrently', 1);
+            ->addOption('parallel', null, InputOption::VALUE_REQUIRED, 'Number of questions to process concurrently', 1)
+            ->addOption('source', null, InputOption::VALUE_REQUIRED, 'Specify source to test: docs, code, or combined (default: all)', null);
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -81,6 +133,7 @@ class BenchmarkCommand extends Command
         $skipCoherence = $input->getOption('skip-coherence');
         $sampleSize = $input->getOption('sample');
         $parallelCount = max(1, (int)$input->getOption('parallel'));
+        $sourceFilter = $input->getOption('source');
 
         $questionsToTest = self::QUESTIONS;
         if ($sampleSize !== null && $sampleSize > 0) {
@@ -111,7 +164,20 @@ class BenchmarkCommand extends Command
             fputcsv($fp, ['Date', 'Source', 'Category', 'Question', 'ChatBot Response', 'Score (0-5)', 'Judge Reason', 'Model Used', 'Response Time (ms)']);
         }
 
-        $sources = ['docs', 'code', 'combined'];
+        $allSources = ['docs', 'code', 'combined'];
+        
+        // Filter sources if --source option is provided
+        if ($sourceFilter !== null) {
+            if (!in_array($sourceFilter, $allSources, true)) {
+                $io->error("Invalid source '$sourceFilter'. Valid sources are: " . implode(', ', $allSources));
+                return Command::FAILURE;
+            }
+            $sources = [$sourceFilter];
+            $io->note("Testing only source: $sourceFilter");
+        } else {
+            $sources = $allSources;
+        }
+        
         $allResults = [];
         $detailedResults = [];
         
