@@ -21,16 +21,37 @@ class QueryRefiner
     public function refine(string $userQuery): string
     {
         $prompt = <<<PROMPT
-Role: Technical Keyword Extractor.
-Task: Add English search modifiers to the user's query.
+Task: Extract exact technical keywords for vector search (API Platform & Symfony).
+Target data: Markdown documentation and PHP functional test files.
 
-CRITICAL RULES:
-1. NEVER delete or modify technical terms from the input (even if they look misspelled like "stateprovider" or "apiresource").
-2. Add English action keywords (e.g., "create example php code implementation" or "documentation explanation").
-3. Output ONLY the English keywords. Do not repeat the user's original query.
+STRICT RULES:
+1. Output ONLY space-separated keywords.
+2. NO conversational text (e.g., "Here are...", "The keywords...").
+3. NO fluff words (e.g., example, how to, explain, documentation, code, tutorial, please).
+4. MUST include exact PHP class/interface/attribute names related to the concept.
+5. Translate all concepts to English.
 
-Input: "$userQuery"
-Output:
+--- EXAMPLES ---
+
+Query: "Comment créer un state provider personnalisé ?"
+Keywords: StateProvider ProviderInterface custom
+
+Query: "How to write a functional test for an API endpoint using ApiTestCase?"
+Keywords: ApiTestCase functional test GET POST request
+
+Query: "Comment faire un custom filter sur doctrine ?"
+Keywords: FilterInterface ContextAwareFilterInterface Doctrine custom filter
+
+Query: "C'est quoi la sérialisation ?"
+Keywords: serialization normalization denormalization Groups attribute
+
+Query: "Give me an example to create an API Platform entity"
+Keywords: ApiResource entity attribute resource
+
+--- TASK ---
+
+Query: "$userQuery"
+Keywords: 
 PROMPT;
 
         try {
