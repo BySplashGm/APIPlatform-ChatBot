@@ -12,7 +12,9 @@ class JudgeService
     public function __construct(
         private HttpClientInterface $httpClient,
         #[Autowire(env: 'JUDGE_MODEL_NAME')]
-        private string $judgeModel = 'mistral'
+        private string $judgeModel = 'mistral',
+        #[Autowire(env: 'OLLAMA_URL')]
+        private string $ollamaUrl = 'http://127.0.0.1:11434'
     ) {
     }
 
@@ -49,7 +51,7 @@ Reply ONLY with the JSON.
 PROMPT;
 
         try {
-            $response = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
+            $response = $this->httpClient->request('POST', $this->ollamaUrl . '/api/chat', [
                 'json' => [
                     'model' => $this->judgeModel,
                     'format' => 'json',
