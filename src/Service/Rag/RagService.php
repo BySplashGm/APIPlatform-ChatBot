@@ -12,14 +12,14 @@ class RagService
 
     private const ALLOWED_SOURCES = ['docs', 'code'];
 
-    private const OLLAMA_URL = 'http://127.0.0.1:11434';
-
     public function __construct(
         private HttpClientInterface $httpClient,
         private EntityManagerInterface $entityManager,
         private QueryRefiner $queryRefiner,
         #[Autowire(env: 'RAG_MODEL_NAME')]
-        private string $modelName
+        private string $modelName,
+        #[Autowire(env: 'OLLAMA_URL')]
+        private string $ollamaUrl = 'http://localhost:11434'
     ) {
     }
 
@@ -89,7 +89,7 @@ class RagService
             throw new \InvalidArgumentException("Le texte est trop long pour générer un embedding (max 50000 caractères).");
         }
 
-        $response = $this->httpClient->request('POST', self::OLLAMA_URL . '/api/embed', [
+        $response = $this->httpClient->request('POST', $this->ollamaUrl . '/api/embed', [
             'json' => ['model' => 'nomic-embed-text', 'input' => $text],
             'timeout' => 30,
         ]);
@@ -292,7 +292,7 @@ PROMPT;
     {
         $systemPrompt = $this->buildSystemPrompt($question, $context);
 
-        $chatResponse = $this->httpClient->request('POST', self::OLLAMA_URL . '/api/chat', [
+        $chatResponse = $this->httpClient->request('POST', $this->ollamaUrl . '/api/chat', [
             'json' => [
                 'model' => $this->modelName,
                 'stream' => false,
