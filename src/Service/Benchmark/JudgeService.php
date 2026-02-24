@@ -12,9 +12,9 @@ class JudgeService
     public function __construct(
         private HttpClientInterface $httpClient,
         #[Autowire(env: 'JUDGE_MODEL_NAME')]
-        private string $judgeModel = 'mistral',
+        private string $judgeModel = 'llama3.1:8b',
         #[Autowire(env: 'OLLAMA_URL')]
-        private string $ollamaUrl = 'http://127.0.0.1:11434'
+        private string $ollamaUrl = 'http://localhost:11434'
     ) {
     }
 
