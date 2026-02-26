@@ -2,7 +2,8 @@
 
 namespace App\Controller;
 
-use Doctrine\ORM\EntityManagerInterface;
+use App\Service\Rag\RagService;
+use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Attribute\AsController;
@@ -13,12 +14,15 @@ use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
 #[AsController]
 class ChatController
 {
-    private const EMBEDDING_MODEL = 'nomic-embed-text';
-    private const CHAT_MODEL = 'mistral';
-
     public function __construct(
         private HttpClientInterface $httpClient,
-        private EntityManagerInterface $entityManager
+        private RagService $ragService,
+        #[Autowire(env: 'OLLAMA_URL')]
+        private string $ollamaUrl,
+        #[Autowire(env: 'RAG_MODEL_NAME')]
+        private string $chatModel,
+        #[Autowire(env: 'CHAT_SOURCE')]
+        private string $chatSource = 'combined'
     ) {}
 
     #[Route('/chat', methods: ['POST'])]
@@ -30,63 +34,38 @@ class ChatController
         $userMessage = end($data['messages'])['content'] ?? '';
 
         try {
-            $embResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/embed', [
-                'json' => [
-                    'model' => self::EMBEDDING_MODEL,
-                    'input' => $userMessage,
-                ],
-            ]);
-            $vector = $embResponse->toArray()['embeddings'][0];
+            ['context' => $context, 'sources' => $sources] = $this->ragService->prepareRagContext($userMessage, $this->chatSource);
         } catch (\Exception $e) {
-            return new StreamedResponse(function() { echo "Erreur lors de la vectorisation."; }, 500);
+            return new StreamedResponse(function () use ($e) {
+                echo "Erreur: " . $e->getMessage();
+            }, 500);
         }
 
-        $vectorStr = '[' . implode(',', $vector) . ']';
+        $systemPrompt = $this->ragService->buildSystemPrompt($userMessage, $context);
 
-        $conn = $this->entityManager->getConnection();
-        $results = $conn->executeQuery("SELECT content, metadata FROM vector_store_docs ORDER BY vector <=> :vectorString LIMIT 3", ['vectorString' => $vectorStr]);
-
-        $context = "";
-        foreach ($results->iterateAssociative() as $row) {
-            $meta = json_decode($row['metadata'], true);
-            $file = $meta['filename'] ?? 'Doc inconnue';
-            $context .= "--- Extrait de : $file ---\n" . $row['content'] . "\n\n";
-        }
-
-        $systemPrompt = <<<PROMPT
-            Tu es un assistant technique strict dédié à la documentation API Platform.
-            Ton rôle est de répondre aux questions des développeurs en utilisant UNIQUEMENT le contexte fourni ci-dessous.
-
-            RÈGLES ABSOLUES :
-            1. Utilise SEULEMENT les informations présentes dans le CONTEXTE ci-dessous.
-            2. Si la réponse n'est pas dans le contexte, dis : "Désolé, je ne trouve pas cette information dans la documentation fournie."
-            3. N'invente JAMAIS de code ou d'explications qui ne sont pas dans le texte source.
-            4. Ne réponds pas aux questions générales (météo, cuisine, histoire, etc.).
-            5. Sois concis et technique.
-
-            CONTEXTE :
-            $context
-            PROMPT;
-
-        $ollamaResponse = $this->httpClient->request('POST', 'http://127.0.0.1:11434/api/chat', [
+        $ollamaResponse = $this->httpClient->request('POST', $this->ollamaUrl . '/api/chat', [
             'buffer' => false,
             'timeout' => 600,
             'json' => [
-                'model' => self::CHAT_MODEL,
+                'model' => $this->chatModel,
                 'options' => [
                     'temperature' => 0.0,
-                    'num_ctx' => 4096
+                    'num_ctx' => 4096,
+                    'num_predict' => 512,
+                    'top_k' => 20,
+                    'top_p' => 0.9,
                 ],
                 'messages' => [
                     ['role' => 'system', 'content' => $systemPrompt],
-                    ['role' => 'user', 'content' => $userMessage]
+                    ['role' => 'user', 'content' => $userMessage],
                 ],
             ],
         ]);
 
         $client = $this->httpClient;
+        $sourcesSection = $this->ragService->formatSources($sources);
 
-        $response = new StreamedResponse(function() use ($ollamaResponse, $client) {
+        $response = new StreamedResponse(function () use ($ollamaResponse, $client, $sourcesSection) {
             if (function_exists('apache_setenv')) {
                 apache_setenv('no-gzip', '1');
             }
@@ -101,7 +80,6 @@ class ChatController
 
             try {
                 foreach ($client->stream($ollamaResponse) as $chunk) {
-                    
                     if ($chunk->isTimeout()) {
                         continue;
                     }
@@ -118,20 +96,26 @@ class ChatController
                         $line = substr($buffer, 0, $pos);
                         $buffer = substr($buffer, $pos + 1);
 
-                        if (trim($line) === '') continue;
+                        if (trim($line) === '') {
+                            continue;
+                        }
 
                         $json = json_decode($line, true);
-                        
+
                         if (is_array($json) && isset($json['message']['content'])) {
                             echo $json['message']['content'];
                             flush();
                         }
-                        
+
                         if (isset($json['done']) && $json['done'] === true) {
+                            if ($sourcesSection !== '') {
+                                echo "\n\n---\n" . $sourcesSection;
+                                flush();
+                            }
                             break 2;
                         }
                     }
-                    
+
                     if (connection_aborted()) {
                         break;
                     }

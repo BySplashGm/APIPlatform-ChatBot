@@ -18,6 +18,8 @@
 /assets/vendor/
 ###< symfony/asset-mapper ###
 
+/.agents/
+/CLAUDE.md
 
 /docs/
 /core/
